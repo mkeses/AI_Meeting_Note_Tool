@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+backend/.venv/
+.ruff_cache/
+.pytest_cache/
+
+# uv
+.python-version
+.cache/uv/
+
+# Logs
+ollama.log
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+# VSCode - Keep shared config, ignore user-specific files
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# Whisper cache
+~/.cache/
+
+# Temporary files
+*.tmp
+*.temp
+nohup.out
+
+# Build artifacts
+dist/
+
+# Environment
+.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+
+.claude
+tmp
+CLAUDE.md
+
+*exercise.py
+STUDENT_PROFILE.md
+exercise/STUDENT_PROFILE.md
+exercise/python/*.py
+exercise/typescript/*.ts

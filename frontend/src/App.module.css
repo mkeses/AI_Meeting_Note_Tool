@@ -1,0 +1,718 @@
+.app {
+  min-height: 100vh;
+  color: var(--color-text-primary);
+  background:
+    radial-gradient(
+      circle at 72% 8%,
+      rgba(72, 137, 255, 0.12),
+      transparent 32rem
+    ),
+    linear-gradient(135deg, #071426 0%, #0c1d35 48%, #111d2d 100%);
+}
+
+.shell {
+  width: min(100%, 1600px);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 20px 24px 32px;
+}
+
+.topbar {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+
+.brandArea {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brandMark {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(125, 181, 255, 0.35);
+  border-radius: 12px;
+  color: #8bc1ff;
+  background: rgba(85, 153, 255, 0.12);
+  font-size: 20px;
+}
+
+.brandName {
+  color: #f4f7fb;
+  font-size: 18px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.brandSubtitle {
+  margin-top: 2px;
+  color: rgba(220, 230, 243, 0.55);
+  font-size: 12px;
+}
+
+.headerStatus {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  color: rgba(232, 239, 248, 0.75);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #62d89b;
+  box-shadow: 0 0 12px rgba(98, 216, 155, 0.8);
+}
+
+.settingsButton {
+  padding: 9px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  color: rgba(232, 239, 248, 0.75);
+  background: rgba(255, 255, 255, 0.05);
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.settingsButton:hover {
+  border-color: rgba(139, 193, 255, 0.45);
+  background: rgba(139, 193, 255, 0.12);
+}
+
+.dashboard {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 280px;
+  align-items: start;
+  gap: 20px;
+}
+
+.sidebar,
+.sessionPanel {
+  position: sticky;
+  top: 20px;
+}
+
+.sidebar {
+  min-height: 680px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 18px;
+  background: rgba(10, 25, 47, 0.58);
+  box-shadow: 0 20px 55px rgba(0, 0, 0, 0.14);
+}
+
+.newSessionButton {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 28px;
+  border-radius: 11px;
+  color: #061427;
+  background: #8bc1ff;
+  font-weight: 750;
+  transition:
+    transform 160ms ease,
+    background 160ms ease;
+}
+
+.newSessionButton:hover:not(:disabled) {
+  background: #a3ceff;
+  transform: translateY(-1px);
+}
+
+.newSessionButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.navGroup {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 26px;
+}
+
+.navLabel {
+  margin: 0 10px 8px;
+  color: rgba(220, 230, 243, 0.4);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.navItem {
+  width: 100%;
+  padding: 10px;
+  border-radius: 9px;
+  color: rgba(232, 239, 248, 0.62);
+  text-align: left;
+  transition:
+    color 160ms ease,
+    background 160ms ease;
+}
+
+.navItem:hover,
+.navItemActive {
+  color: #eaf3ff;
+  background: rgba(139, 193, 255, 0.12);
+}
+
+.localStatus {
+  margin-top: auto;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 11px;
+  color: rgba(220, 230, 243, 0.54);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.workspace {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.card {
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  background: rgba(25, 46, 76, 0.72);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.12);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.cardTitle {
+  color: #f3f7fc;
+  font-size: 18px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.cardDescription {
+  margin-top: 5px;
+  color: rgba(220, 230, 243, 0.55);
+  font-size: 13px;
+}
+
+.captureCard {
+  overflow: hidden;
+}
+
+.captureContent {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.85fr) minmax(300px, 1.15fr);
+  gap: 14px;
+}
+
+.recordArea,
+.uploadArea {
+  min-height: 235px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+}
+
+.recordArea {
+  position: relative;
+  padding: 28px;
+  border: 1px solid rgba(139, 193, 255, 0.16);
+  background:
+    radial-gradient(
+      circle at center,
+      rgba(79, 148, 255, 0.16),
+      transparent 65%
+    ),
+    rgba(9, 26, 49, 0.55);
+}
+
+.recordArea > * {
+  max-width: 100%;
+}
+
+.uploadArea {
+  padding: 20px;
+  border: 1px dashed rgba(139, 193, 255, 0.45);
+  background: rgba(139, 193, 255, 0.055);
+}
+
+.textInputDetails {
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.textInputContent {
+  margin-top: 16px;
+}
+
+.configCard {
+  display: grid;
+  gap: 18px;
+}
+
+.setupGroup {
+  display: grid;
+  gap: 12px;
+}
+
+.setupLabel,
+.configLabel {
+  color: #edf4fc;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.configHint {
+  margin-top: 4px;
+  color: rgba(220, 230, 243, 0.52);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.meetingOptions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.meetingOption {
+  position: relative;
+  min-height: 58px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 10px;
+  color: rgba(220, 230, 243, 0.58);
+  background: rgba(5, 17, 32, 0.38);
+  text-align: left;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.meetingOption:hover {
+  border-color: rgba(139, 193, 255, 0.42);
+  color: #eaf3ff;
+  background: rgba(139, 193, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.meetingOptionSelected {
+  border-color: rgba(139, 193, 255, 0.72);
+  color: #edf6ff;
+  background: rgba(75, 145, 237, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(139, 193, 255, 0.12);
+}
+
+.meetingOptionLabel {
+  display: block;
+  padding-right: 16px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.meetingOptionCheck {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  color: #8bc1ff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.selectedMeetingInfo {
+  display: grid;
+  gap: 4px;
+  padding: 13px 14px;
+  border-left: 2px solid rgba(139, 193, 255, 0.55);
+  border-radius: 0 9px 9px 0;
+  background: rgba(139, 193, 255, 0.055);
+}
+
+.selectedMeetingTitle {
+  color: #eaf3ff;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.selectedMeetingDescription {
+  color: rgba(220, 230, 243, 0.58);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.selectedMeetingSections {
+  color: rgba(139, 193, 255, 0.72);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.setupDivider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.cleanupRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+}
+
+.switch {
+  width: 46px;
+  height: 26px;
+  position: relative;
+  flex-shrink: 0;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.switchOn {
+  border-color: rgba(139, 193, 255, 0.62);
+  background: #4b91ed;
+}
+
+.switchThumb {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #edf5ff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.24);
+  transition: transform 160ms ease;
+}
+
+.switchOn .switchThumb {
+  transform: translateX(19px);
+}
+
+.promptSection {
+  display: grid;
+  gap: 14px;
+}
+
+.promptToggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 0 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: #edf4fc;
+  text-align: left;
+  font-weight: 700;
+}
+
+.promptToggleTitle,
+.promptToggleHint {
+  display: block;
+}
+
+.promptToggleTitle {
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.promptToggleHint {
+  margin-top: 4px;
+  color: rgba(220, 230, 243, 0.48);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.promptChevron {
+  color: rgba(220, 230, 243, 0.56);
+  font-size: 18px;
+  transition: transform 160ms ease;
+}
+
+.promptChevronOpen {
+  transform: rotate(180deg);
+}
+
+.promptEditorArea {
+  display: grid;
+  gap: 10px;
+}
+
+.promptEditorHeader,
+.promptEditorFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.promptEditorLabel {
+  color: rgba(235, 242, 250, 0.78);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.promptCharacterCount,
+.promptEditorNote {
+  color: rgba(220, 230, 243, 0.42);
+  font-size: 11px;
+}
+
+.promptEditor {
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+  padding: 14px;
+  border: 1px solid rgba(139, 193, 255, 0.25);
+  border-radius: 11px;
+  color: #dce9f8;
+  background: rgba(5, 17, 32, 0.62);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.recordingTimer {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  color: #ffb6bc;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.recordingIndicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e45b67;
+  box-shadow: 0 0 10px rgba(228, 91, 103, 0.8);
+}
+
+.restoreButton {
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 8px;
+  color: rgba(235, 242, 250, 0.72);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.restoreButton:hover:not(:disabled) {
+  border-color: rgba(139, 193, 255, 0.42);
+  color: #edf5ff;
+  background: rgba(139, 193, 255, 0.1);
+}
+
+.restoreButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.reviewCard {
+  min-height: 320px;
+}
+
+.sessionPanel {
+  display: grid;
+  gap: 16px;
+}
+
+.sessionFilename {
+  overflow: hidden;
+  color: #edf4fc;
+  font-size: 13px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionMeta {
+  margin-top: 5px;
+  color: rgba(220, 230, 243, 0.5);
+  font-size: 11px;
+}
+
+.sessionDuration {
+  margin-top: 14px;
+  color: #a8ceff;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.sessionCard {
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 16px;
+  background: rgba(25, 46, 76, 0.58);
+}
+
+.sessionCardTitle {
+  margin-bottom: 14px;
+  color: #edf4fc;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.emptySession {
+  color: rgba(220, 230, 243, 0.5);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.pipeline {
+  display: grid;
+  gap: 12px;
+}
+
+.pipelineStep {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: rgba(220, 230, 243, 0.48);
+  font-size: 12px;
+}
+
+.pipelineDot {
+  width: 8px;
+  height: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+}
+
+.pipelineStepComplete {
+  color: #9de2b9;
+}
+
+.pipelineStepComplete .pipelineDot {
+  border-color: #62d89b;
+  background: #62d89b;
+}
+
+.pipelineStepActive {
+  color: #a8ceff;
+}
+
+.pipelineStepActive .pipelineDot {
+  border-color: #8bc1ff;
+  background: #8bc1ff;
+  box-shadow: 0 0 12px rgba(139, 193, 255, 0.8);
+}
+
+.errorArea {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1180px) {
+  .dashboard {
+    grid-template-columns: 190px minmax(0, 1fr);
+  }
+
+  .sessionPanel {
+    position: static;
+    grid-column: 2;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .captureContent {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .meetingOptions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .shell {
+    padding: 12px;
+  }
+
+  .topbar {
+    align-items: flex-start;
+  }
+
+  .headerStatus {
+    display: none;
+  }
+
+  .dashboard {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .sessionPanel {
+    grid-column: auto;
+    grid-template-columns: 1fr;
+  }
+
+  .card {
+    padding: 16px;
+    border-radius: 15px;
+  }
+
+  .recordArea,
+  .uploadArea {
+    min-height: 210px;
+  }
+
+  .promptEditorHeader,
+  .promptEditorFooter {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .restoreButton {
+    width: 100%;
+  }
+}

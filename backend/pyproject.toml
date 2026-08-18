@@ -1,0 +1,69 @@
+[project]
+name = "ai-transcript-app"
+version = "0.1.0"
+description = "AI-powered voice transcription with Whisper and LLM cleaning"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "faster-whisper>=1.2.0",
+    "ctranslate2>=4.5.0",
+    "numpy>=2.3.4",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.9",
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "black>=24.0.0",
+]
+
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+exclude = '''
+/(
+    \.venv
+  | __pycache__
+  | \.pytest_cache
+  | \.ruff_cache
+  | \.git
+)/
+'''
+
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+exclude = [".venv", "__pycache__", ".pytest_cache", "*.egg-info"]
+
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "N",
+    "UP",
+    "B",
+    "C4",
+    "DTZ",
+    "T10",
+    "FA",
+    "ISC",
+    "RET",
+    "SIM",
+]
+ignore = [
+    "E501",
+    "W191",
+    "E111",
+    "E114",
+    "E117",
+]

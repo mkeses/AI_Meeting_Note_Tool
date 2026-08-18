@@ -1,0 +1,222 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.topBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.statusBlock {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 11px;
+  border: 1px solid rgba(98, 216, 155, 0.2);
+  border-radius: 9px;
+  color: rgba(222, 241, 231, 0.82);
+  background: rgba(98, 216, 155, 0.08);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.statusDot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #62d89b;
+  box-shadow: 0 0 10px rgba(98, 216, 155, 0.65);
+}
+
+.statusText {
+  white-space: nowrap;
+}
+
+.segmentedControl {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(5, 17, 32, 0.55);
+}
+
+.segmentButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  color: rgba(220, 230, 243, 0.5);
+  font-size: 11px;
+  font-weight: 700;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.segmentButton:hover {
+  color: #eaf3ff;
+  background: rgba(139, 193, 255, 0.1);
+}
+
+.segmentButtonActive {
+  color: #061427;
+  background: #8bc1ff;
+}
+
+.summaryHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.summaryEyebrow {
+  margin: 0;
+  color: rgba(220, 230, 243, 0.52);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.summaryBody {
+  min-width: 0;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.actionButtons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.copyButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 8px;
+  color: rgba(235, 242, 250, 0.74);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  font-weight: 700;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.copyButton:hover {
+  border-color: rgba(139, 193, 255, 0.38);
+  color: #edf5ff;
+  background: rgba(139, 193, 255, 0.12);
+}
+
+.sectionsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.sectionCard {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  background: rgba(5, 17, 32, 0.27);
+}
+
+.sectionCard:first-child {
+  grid-column: 1 / -1;
+}
+
+.sectionCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 11px;
+  color: #a9d0ff;
+}
+
+.sectionCardHeader h3 {
+  margin: 0;
+  color: #edf4fc;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.sectionList,
+.sectionParagraphs {
+  margin: 0;
+  color: rgba(229, 237, 247, 0.78);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.sectionList {
+  padding-left: 18px;
+}
+
+.sectionList li {
+  margin-bottom: 6px;
+}
+
+.sectionList li:last-child {
+  margin-bottom: 0;
+}
+
+.sectionParagraphs {
+  display: grid;
+  gap: 8px;
+}
+
+.sectionParagraphs p {
+  margin: 0;
+}
+
+@media (max-width: 760px) {
+  .topBar,
+  .summaryHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .segmentedControl {
+    width: 100%;
+  }
+
+  .segmentButton {
+    flex: 1;
+  }
+
+  .actionButtons {
+    justify-content: stretch;
+  }
+
+  .copyButton {
+    flex: 1;
+  }
+
+  .sectionsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sectionCard:first-child {
+    grid-column: auto;
+  }
+}

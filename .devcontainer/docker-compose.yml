@@ -1,0 +1,55 @@
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    volumes:
+      - ..:/workspaces/ai-transcript-app:cached
+
+    environment:
+      PYTHONUNBUFFERED: "1"
+
+    command: sleep infinity
+
+    ports:
+      - "8000:8000"
+      - "3000:3000"
+
+    user: vscode
+
+    depends_on:
+      - ollama
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  ollama:
+    image: ollama/ollama:0.12.9
+
+    volumes:
+      - ai-transcript-ollama-models:/root/.ollama
+
+    ports:
+      - "11435:11434"
+
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  ai-transcript-ollama-models:
