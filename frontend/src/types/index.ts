@@ -60,7 +60,10 @@ export interface SettingsPanelProps {
 }
 
 export interface TranscriptionResultsProps {
+  onRegenerateCleanup: () => void | Promise<void>;
   rawText: string | null;
+  editedRawText: string;
+  onRawTextChange: (text: string) => void;
   cleanedText: string | null;
   useLLM: boolean;
   isCopied: boolean;

@@ -68,7 +68,7 @@
       "version": "latest"
     }
   },
-  
+
   // In case Codespaces is used a decent machine is required for local AI
   "hostRequirements": {
     "cpus": 4,

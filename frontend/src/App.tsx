@@ -25,6 +25,15 @@ interface SystemPromptResponse {
 
 type MeetingType = 'general' | 'design_review' | 'debug_sync' | 'standup';
 type SessionInputType = 'recording' | 'audio-file' | 'text' | null;
+type SavedSession = {
+  id: string;
+  sourceKey: string;
+  filename: string;
+  createdAt: string;
+  meetingType: MeetingType;
+  rawText: string;
+  cleanedText: string;
+};
 
 interface MeetingOption {
   value: MeetingType;
@@ -91,13 +100,24 @@ function formatDuration(totalSeconds: number): string {
     .join(':');
 }
 
+function formatSessionDate(createdAt: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(createdAt));
+}
+
 function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [rawText, setRawText] = useState<string | null>(null);
+  const [editedRawText, setEditedRawText] = useState('');
   const [cleanedText, setCleanedText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [useLLM, setUseLLM] = useState(true);
+  const [includeMicrophone, setIncludeMicrophone] = useState(true);
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState('');
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState('');
@@ -106,8 +126,10 @@ function App() {
   const [isCleaningWithLLM, setIsCleaningWithLLM] = useState(false);
   const [meetingType, setMeetingType] = useState<MeetingType>('general');
   const [isPromptOpen, setIsPromptOpen] = useState(false);
-
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingSourceKeyRef = useRef<string | null>(null);
+  const liveSocketRef = useRef<WebSocket | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const isKeyDownRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -117,6 +139,125 @@ function App() {
   const [sessionFilename, setSessionFilename] = useState<string | null>(null);
   const [sessionInputType, setSessionInputType] =
     useState<SessionInputType>(null);
+
+  const [savedSessions, setSavedSessions] = useState<SavedSession[]>(() => {
+    try {
+      const storedSessions = localStorage.getItem('meeting-sessions');
+
+      if (!storedSessions) {
+        return [];
+      }
+
+      const parsedSessions = JSON.parse(
+        storedSessions
+      ) as Partial<SavedSession>[];
+
+      return parsedSessions.map((session) => ({
+        id: session.id || crypto.randomUUID(),
+        sourceKey: session.sourceKey || session.id || crypto.randomUUID(),
+        filename: session.filename || 'Untitled session',
+        createdAt: session.createdAt || new Date().toISOString(),
+        meetingType: session.meetingType || 'general',
+        rawText: session.rawText || '',
+        cleanedText: session.cleanedText || '',
+      }));
+    } catch (error) {
+      console.error('Failed to load saved sessions:', error);
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('meeting-sessions', JSON.stringify(savedSessions));
+    } catch (error) {
+      console.error('Failed to save sessions:', error);
+    }
+  }, [savedSessions]);
+
+  const openSavedSession = useCallback(
+    (session: SavedSession) => {
+      if (isRecording || isProcessing) {
+        return;
+      }
+      setActiveSessionId(session.id);
+      setRawText(session.rawText);
+      setEditedRawText(session.rawText);
+      setCleanedText(session.cleanedText);
+      setMeetingType(session.meetingType);
+      setSessionFilename(session.filename);
+      setSessionInputType(
+        session.filename === 'Pasted transcript'
+          ? 'text'
+          : session.filename === 'recording.webm'
+            ? 'recording'
+            : 'audio-file'
+      );
+      setLiveTranscript('');
+      setError(null);
+      setIsCopied(false);
+      setIsCleaningWithLLM(false);
+      setRecordingSeconds(0);
+    },
+    [isProcessing, isRecording]
+  );
+
+  const saveChanges = useCallback(() => {
+    if (!activeSessionId) {
+      return;
+    }
+
+    const safeCleanedText = cleanedText ?? '';
+    const safeFilename = sessionFilename?.trim() || 'Untitled session';
+
+    setSavedSessions((currentSessions) =>
+      currentSessions.map((session) =>
+        session.id === activeSessionId
+          ? {
+              ...session,
+              filename: safeFilename,
+              rawText: editedRawText,
+              cleanedText: safeCleanedText,
+              meetingType,
+            }
+          : session
+      )
+    );
+    setSaveMessage('Saved');
+
+    window.setTimeout(() => {
+      setSaveMessage(null);
+    }, 2000);
+  }, [
+    activeSessionId,
+    cleanedText,
+    editedRawText,
+    meetingType,
+    sessionFilename,
+  ]);
+
+  const deleteSavedSession = useCallback(
+    (sessionId: string) => {
+      setSavedSessions((currentSessions) =>
+        currentSessions.filter((session) => session.id !== sessionId)
+      );
+
+      if (activeSessionId === sessionId) {
+        setActiveSessionId(null);
+        setRawText(null);
+        setEditedRawText('');
+        setCleanedText(null);
+        setSessionFilename(null);
+        setSessionInputType(null);
+        setLiveTranscript('');
+        setError(null);
+        setIsCopied(false);
+        setIsCleaningWithLLM(false);
+        setRecordingSeconds(0);
+      }
+    },
+    [activeSessionId]
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -193,7 +334,7 @@ function App() {
     async (text: string) => {
       if (!useLLM || !text.trim()) {
         setIsCleaningWithLLM(false);
-        return;
+        return '';
       }
 
       setIsCleaningWithLLM(true);
@@ -223,16 +364,30 @@ function App() {
           );
         }
 
-        setCleanedText(data.text || '');
+        const cleaned = data.text || '';
+
+        setCleanedText(cleaned);
+
+        return cleaned;
       } catch (err) {
         console.error('LLM cleaning failed:', err);
         setError(LLM_CLEANING_ERROR);
+        return '';
       } finally {
         setIsCleaningWithLLM(false);
       }
     },
     [meetingType, systemPrompt, useLLM]
   );
+
+  const regenerateCleanup = useCallback(async () => {
+    if (!editedRawText.trim() || isCleaningWithLLM) {
+      return;
+    }
+
+    setError(null);
+    await cleanTranscription(editedRawText);
+  }, [cleanTranscription, editedRawText, isCleaningWithLLM]);
 
   const uploadAudio = useCallback(
     async (audioBlob: Blob, filename = 'recording.webm') => {
@@ -261,9 +416,57 @@ function App() {
         }
 
         const transcript = data.text || '';
-        setRawText(transcript);
 
-        await cleanTranscription(transcript);
+        setRawText(transcript);
+        setEditedRawText(transcript);
+
+        const cleaned = await cleanTranscription(transcript);
+
+        const newSession: SavedSession = {
+          id: crypto.randomUUID(),
+          sourceKey:
+            filename === 'recording.webm'
+              ? recordingSourceKeyRef.current ||
+                `recording:${crypto.randomUUID()}`
+              : `audio-file:${filename}`,
+          filename,
+          createdAt: new Date().toISOString(),
+          meetingType,
+          rawText: transcript,
+          cleanedText: cleaned,
+        };
+
+        setSavedSessions((currentSessions) => {
+          const existingSession = currentSessions.find(
+            (session) => session.sourceKey === newSession.sourceKey
+          );
+
+          if (existingSession) {
+            setActiveSessionId(existingSession.id);
+
+            return currentSessions.map((session) =>
+              session.id === existingSession.id
+                ? {
+                    ...session,
+                    filename: newSession.filename,
+                    createdAt: newSession.createdAt,
+                    meetingType: newSession.meetingType,
+                    rawText: newSession.rawText,
+                    cleanedText: newSession.cleanedText,
+                  }
+                : session
+            );
+          }
+
+          setActiveSessionId(newSession.id);
+
+          return [newSession, ...currentSessions];
+        });
+
+        setSessionFilename(filename);
+        setSessionInputType(
+          filename === 'recording.webm' ? 'recording' : 'audio-file'
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
 
@@ -274,7 +477,7 @@ function App() {
         setIsProcessing(false);
       }
     },
-    [cleanTranscription]
+    [cleanTranscription, meetingType]
   );
 
   const startRecording = useCallback(async () => {
@@ -291,11 +494,70 @@ function App() {
     let microphoneStream: MediaStream | null = null;
     let audioContext: AudioContext | null = null;
 
+    recordingSourceKeyRef.current = `recording:${crypto.randomUUID()}`;
     setRecordingSeconds(0);
     setSessionFilename('recording.webm');
     setSessionInputType('recording');
 
     try {
+      const socket = new WebSocket('ws://localhost:8000/ws/transcribe');
+
+      await new Promise<void>((resolve, reject) => {
+        socket.onmessage = (event: MessageEvent) => {
+          if (typeof event.data !== 'string') {
+            return;
+          }
+
+          console.log('WebSocket message received:', event.data);
+
+          try {
+            const message = JSON.parse(event.data) as {
+              type: string;
+              text?: string;
+            };
+
+            if (message.type === 'transcript' || message.type === 'final') {
+              const text = message.text || '';
+
+              setLiveTranscript(text);
+
+              if (message.type === 'final') {
+                setRawText(text);
+                setEditedRawText(text);
+              }
+            }
+          } catch (error) {
+            console.error('Could not parse WebSocket message:', error);
+          }
+        };
+        socket.onopen = () => {
+          socket.send(
+            JSON.stringify({
+              type: 'start',
+              sample_rate: 48000,
+              channels: 1,
+              include_microphone: includeMicrophone,
+              language: 'en',
+            })
+          );
+
+          resolve();
+        };
+
+        socket.onclose = (event) => {
+          console.log(
+            'WebSocket closed:',
+            event.code,
+            event.reason,
+            'clean:',
+            event.wasClean
+          );
+        };
+        socket.onerror = () =>
+          reject(new Error('Could not connect to live transcription.'));
+      });
+
+      liveSocketRef.current = socket;
       if (!navigator.mediaDevices?.getDisplayMedia) {
         throw new Error(
           'Desktop audio capture is not supported by this browser.'
@@ -327,17 +589,20 @@ function App() {
         audioTrackSettings: desktopTracks.map((track) => track.getSettings()),
       });
 
-      microphoneStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      if (includeMicrophone) {
+        microphoneStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      }
 
-      const microphoneTracks = microphoneStream.getAudioTracks();
+      const microphoneTracks = microphoneStream?.getAudioTracks() ?? [];
 
       console.log('Microphone capture result:', {
+        enabled: includeMicrophone,
         audioTracks: microphoneTracks.length,
         audioTrackStates: microphoneTracks.map((track) => track.readyState),
         audioTrackSettings: microphoneTracks.map((track) =>
@@ -345,7 +610,7 @@ function App() {
         ),
       });
 
-      if (microphoneTracks.length === 0) {
+      if (includeMicrophone && microphoneTracks.length === 0) {
         throw new Error('No microphone audio track was captured.');
       }
 
@@ -367,16 +632,51 @@ function App() {
         sampleRate: 48000,
       });
 
+      await audioContext.audioWorklet.addModule('/src/audio/pcm-processor.ts');
+
       if (audioContext.state === 'suspended') {
         await audioContext.resume();
       }
 
       const destination = audioContext.createMediaStreamDestination();
 
-      const microphoneSource =
-        audioContext.createMediaStreamSource(microphoneStream);
+      const pcmProcessor = new AudioWorkletNode(audioContext, 'pcm-processor');
 
-      microphoneSource.connect(destination);
+      let pcmBuffer = new Uint8Array(0);
+
+      pcmProcessor.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+        const incoming = new Uint8Array(event.data);
+        const combined = new Uint8Array(pcmBuffer.length + incoming.length);
+
+        combined.set(pcmBuffer);
+        combined.set(incoming, pcmBuffer.length);
+        pcmBuffer = combined;
+
+        const chunkSize = 16_000;
+
+        if (
+          pcmBuffer.length >= chunkSize &&
+          liveSocketRef.current?.readyState === WebSocket.OPEN
+        ) {
+          console.log('Sending buffered PCM:', pcmBuffer.length);
+
+          liveSocketRef.current.send(pcmBuffer.slice(0, chunkSize));
+          pcmBuffer = pcmBuffer.slice(chunkSize);
+        }
+      };
+      const silentGain = audioContext.createGain();
+      silentGain.gain.value = 0;
+
+      pcmProcessor.connect(silentGain);
+      silentGain.connect(audioContext.destination);
+
+      if (microphoneStream) {
+        const microphoneSource =
+          audioContext.createMediaStreamSource(microphoneStream);
+
+        microphoneSource.connect(destination);
+        microphoneSource.connect(pcmProcessor);
+      }
 
       const liveDesktopTracks = desktopTracks.filter(
         (track) => track.readyState === 'live'
@@ -388,6 +688,7 @@ function App() {
           audioContext.createMediaStreamSource(desktopStream);
 
         desktopSource.connect(destination);
+        desktopSource.connect(pcmProcessor);
 
         console.log('Desktop audio connected.');
       } else {
@@ -425,7 +726,10 @@ function App() {
       mediaRecorderRef.current = recorder;
       chunksRef.current = [];
       audioContextRef.current = audioContext;
-      activeStreamsRef.current = [displayStream, microphoneStream];
+      activeStreamsRef.current = [
+        displayStream,
+        ...(microphoneStream ? [microphoneStream] : []),
+      ];
 
       recorder.ondataavailable = (event: BlobEvent) => {
         if (event.data.size > 0) {
@@ -465,6 +769,8 @@ function App() {
       recorder.start(250);
       setIsRecording(true);
     } catch (err) {
+      liveSocketRef.current?.close();
+      liveSocketRef.current = null;
       console.error('Audio capture failed:', err);
 
       displayStream?.getTracks().forEach((track) => track.stop());
@@ -512,13 +818,33 @@ function App() {
       setIsRecording(false);
       setIsProcessing(false);
     }
-  }, [cleanupAudioCapture, isProcessing, isRecording, uploadAudio]);
+  }, [
+    cleanupAudioCapture,
+    includeMicrophone,
+    isProcessing,
+    isRecording,
+    uploadAudio,
+  ]);
 
   const stopRecording = useCallback(() => {
+    console.log(
+      'stopRecording called',
+      'socket:',
+      liveSocketRef.current,
+      'socketState:',
+      liveSocketRef.current?.readyState,
+      'recorderState:',
+      mediaRecorderRef.current?.state
+    );
     const recorder = mediaRecorderRef.current;
 
     if (!recorder || recorder.state === 'inactive') {
       return;
+    }
+
+    if (liveSocketRef.current?.readyState === WebSocket.OPEN) {
+      console.log('Sending stop message to WebSocket');
+      liveSocketRef.current.send(JSON.stringify({ type: 'stop' }));
     }
 
     recorder.stop();
@@ -706,8 +1032,9 @@ function App() {
     if (isRecording || isProcessing) {
       return;
     }
-
+    setActiveSessionId(null);
     setRawText(null);
+    setEditedRawText('');
     setCleanedText(null);
     setError(null);
     setIsCopied(false);
@@ -779,7 +1106,46 @@ function App() {
               <button className={styles.navItem} type="button">
                 Recent sessions
               </button>
+              <div className={styles.recentSessionsList}>
+                {savedSessions.length === 0 ? (
+                  <div className={styles.emptyRecentSessions}>
+                    No saved sessions yet.
+                  </div>
+                ) : (
+                  savedSessions.slice(0, 5).map((session) => (
+                    <div className={styles.recentSessionItem} key={session.id}>
+                      <button
+                        className={`${styles.recentSessionOpenButton} ${
+                          activeSessionId === session.id
+                            ? styles.recentSessionOpenButtonActive
+                            : ''
+                        }`}
+                        type="button"
+                        onClick={() => openSavedSession(session)}
+                        disabled={isRecording || isProcessing}
+                      >
+                        <div className={styles.recentSessionFilename}>
+                          {session.filename}
+                        </div>
 
+                        <div className={styles.recentSessionDate}>
+                          {formatSessionDate(session.createdAt)}
+                        </div>
+                      </button>
+
+                      <button
+                        className={styles.deleteSessionButton}
+                        type="button"
+                        onClick={() => deleteSavedSession(session.id)}
+                        disabled={isRecording || isProcessing}
+                        aria-label={`Delete ${session.filename}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
               <button className={styles.navItem} type="button">
                 Saved notes
               </button>
@@ -914,7 +1280,32 @@ function App() {
               </div>
 
               <div className={styles.setupDivider} />
+              <div className={styles.cleanupRow}>
+                <div>
+                  <div className={styles.configLabel}>Include microphone</div>
 
+                  <div className={styles.configHint}>
+                    Capture your microphone together with the selected desktop
+                    audio.
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={includeMicrophone}
+                  aria-label="Include microphone"
+                  className={`${styles.switch} ${
+                    includeMicrophone ? styles.switchOn : ''
+                  }`}
+                  onClick={() => setIncludeMicrophone((value) => !value)}
+                  disabled={isRecording || isProcessing}
+                >
+                  <span className={styles.switchThumb} />
+                </button>
+              </div>
+
+              <div className={styles.setupDivider} />
               <div className={styles.cleanupRow}>
                 <div>
                   <div className={styles.configLabel}>
@@ -1035,9 +1426,37 @@ function App() {
                   </p>
                 </div>
               </div>
+              {liveTranscript && (
+                <div
+                  style={{
+                    marginBottom: '16px',
+                    padding: '14px',
+                    border: '1px solid rgba(139, 193, 255, 0.25)',
+                    borderRadius: '11px',
+                    color: '#dce9f8',
+                    background: 'rgba(5, 17, 32, 0.45)',
+                    lineHeight: 1.6,
+                  }}
+                >
+                  <div
+                    style={{
+                      marginBottom: '8px',
+                      color: '#8bc1ff',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Live transcript
+                  </div>
 
+                  {liveTranscript}
+                </div>
+              )}
               <TranscriptionResults
                 rawText={rawText}
+                editedRawText={editedRawText}
+                onRawTextChange={setEditedRawText}
+                onRegenerateCleanup={regenerateCleanup}
                 cleanedText={cleanedText}
                 useLLM={useLLM}
                 isCopied={isCopied}
@@ -1054,9 +1473,25 @@ function App() {
 
               {sessionFilename ? (
                 <>
-                  <div className={styles.sessionFilename}>
-                    {sessionFilename}
-                  </div>
+                  <input
+                    className={styles.sessionFilenameInput}
+                    value={sessionFilename ?? ''}
+                    onChange={(event) => setSessionFilename(event.target.value)}
+                    placeholder="Session name"
+                    aria-label="Session name"
+                  />
+
+                  <button
+                    type="button"
+                    className={styles.saveChangesButton}
+                    onClick={saveChanges}
+                    disabled={!activeSessionId || isRecording || isProcessing}
+                  >
+                    Save changes
+                  </button>
+                  {saveMessage && (
+                    <span className={styles.saveMessage}>{saveMessage}</span>
+                  )}
 
                   <div className={styles.sessionMeta}>
                     {sessionInputType === 'recording'

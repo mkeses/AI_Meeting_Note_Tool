@@ -156,6 +156,9 @@ function downloadMarkdownFile(content: string, filename: string) {
 
 export function TranscriptionResults({
   rawText,
+  editedRawText,
+  onRawTextChange,
+  onRegenerateCleanup,
   cleanedText,
   useLLM,
   isCopied,
@@ -323,13 +326,28 @@ export function TranscriptionResults({
             )}
           </div>
 
-          <TextBox
-            mode="display"
-            variant="default"
-            value={rawText || ''}
-            isLoading={isProcessing && !rawText}
-            maxHeight="420px"
+          <textarea
+            className={styles.rawTranscriptEditor}
+            value={editedRawText}
+            onChange={(event) => onRawTextChange(event.target.value)}
+            disabled={isProcessing && !rawText}
+            rows={12}
+            aria-label="Editable raw transcript"
           />
+
+          <button
+            type="button"
+            className={styles.copyButton}
+            onClick={() => void onRegenerateCleanup()}
+            disabled={
+              !editedRawText.trim() || isCleaningWithLLM || isProcessing
+            }
+          >
+            <Sparkles size={16} />
+            <span>
+              {isCleaningWithLLM ? 'Regenerating...' : 'Regenerate cleanup'}
+            </span>
+          </button>
         </Box>
       )}
     </div>
