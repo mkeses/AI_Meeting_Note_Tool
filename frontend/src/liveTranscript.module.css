@@ -1,0 +1,90 @@
+.liveTranscript {
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid rgba(139, 193, 255, 0.25);
+  border-radius: 11px;
+  color: #dce9f8;
+  background: rgba(5, 17, 32, 0.45);
+  line-height: 1.6;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.title {
+  color: #8bc1ff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(220, 230, 243, 0.5);
+  font-size: 11px;
+}
+
+.status::before {
+  width: 6px;
+  height: 6px;
+  display: inline-block;
+  border-radius: 50%;
+  background: #8bc1ff;
+  box-shadow: 0 0 9px rgba(139, 193, 255, 0.75);
+  content: '';
+}
+
+.committedText {
+  color: #dce9f8;
+  white-space: pre-wrap;
+}
+
+.partialText {
+  color: rgba(220, 233, 248, 0.55);
+  background: rgba(139, 193, 255, 0.06);
+  border-radius: 4px;
+  user-select: none;
+}
+
+.notice {
+  margin-top: 9px;
+  color: rgba(220, 230, 243, 0.42);
+  font-size: 11px;
+}
+
+.emptyText {
+  color: rgba(220, 230, 243, 0.42);
+  font-style: italic;
+}
+
+.transcriptLine {
+  display: block;
+  color: #dce9f8;
+  line-height: 1.6;
+}
+
+.committedEditor {
+  width: 100%;
+  min-height: 96px;
+  box-sizing: border-box;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  resize: vertical;
+  color: #dce9f8;
+  background: transparent;
+  font: inherit;
+  line-height: 1.6;
+}
+
+.committedEditor:focus {
+  outline: 1px solid rgba(139, 193, 255, 0.35);
+  outline-offset: 4px;
+  border-radius: 4px;
+}

@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import styles from './App.module.css';
 import { ErrorMessage } from './components/ErrorMessage';
@@ -12,6 +6,7 @@ import { RecordButton } from './components/RecordButton';
 import { TextInputZone } from './components/TextInputZone';
 import { TranscriptionResults } from './components/TranscriptionResults';
 import { UploadZone } from './components/UploadZone';
+import liveStyles from './liveTranscript.module.css';
 
 interface TranscriptionResponse {
   success: boolean;
@@ -113,8 +108,15 @@ function formatSessionDate(createdAt: string): string {
   }).format(new Date(createdAt));
 }
 
-function composeLiveTranscript(committedText: string, partialText: string) {
-  return [committedText.trim(), partialText.trim()].filter(Boolean).join(' ');
+function normalizeForCompare(text: string): string {
+  return text.trim().replace(/\s+/g, ' ');
+}
+
+function joinNonEmpty(...parts: string[]): string {
+  return parts
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(' ');
 }
 
 function App() {
@@ -126,8 +128,6 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [useLLM, setUseLLM] = useState(true);
   const [includeMicrophone, setIncludeMicrophone] = useState(true);
-  const [liveTranscript, setLiveTranscript] = useState('');
-  const [editableLiveTranscript, setEditableLiveTranscript] = useState('');
   const [isLiveTranscriptEdited, setIsLiveTranscriptEdited] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState(false);
@@ -140,11 +140,18 @@ function App() {
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+
+  // Live transcript display state.
+  // `liveCommittedText` is the white, editable region.
+  // `livePartialText` is the gray, read-only region that is still
+  // being transcribed and can change at any moment.
+  const [liveCommittedText, setLiveCommittedText] = useState('');
+  const [livePartialText, setLivePartialText] = useState('');
+
   const [sessionFilename, setSessionFilename] = useState<string | null>(null);
   const [sessionInputType, setSessionInputType] =
     useState<SessionInputType>(null);
 
-  const isLiveTranscriptEditedRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingSourceKeyRef = useRef<string | null>(null);
   const liveSocketRef = useRef<WebSocket | null>(null);
@@ -153,23 +160,33 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const activeStreamsRef = useRef<MediaStream[]>([]);
-  const liveCommittedTextRef = useRef('');
-  const livePartialTextRef = useRef('');
-  const liveEditBaseRef = useRef<string | null>(null);
-  const liveBackendTextRef = useRef('');
-  const editableLiveTranscriptRef = useRef('');
-  const liveTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const liveSelectionRef = useRef({
-    start: 0,
-    end: 0,
-    direction: 'none' as 'forward' | 'backward' | 'none',
-  });
-  const shouldRestoreLiveSelectionRef = useRef(false);
   const isStoppingRecordingRef = useRef(false);
-  const liveCommittedDisplayedTextRef = useRef('');
-  const livePartialDisplayedTextRef = useRef('');
+  const liveTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // --- Live transcript ownership model ---
+  //
+  // isLiveTranscriptEditedRef: once true, the user owns the committed
+  // text. The backend may no longer overwrite it directly.
+  //
+  // liveUserCommittedTextRef: the authoritative committed text that is
+  // shown in the editable textarea. Before the first edit this simply
+  // mirrors the backend's committed_text. After the first edit, new
+  // committed speech recognized by the backend is appended to this
+  // value instead of replacing it.
+  //
+  // backendCommittedBaselineRef: the last backend committed_text we
+  // have already incorporated into liveUserCommittedTextRef. Used to
+  // detect the *new* suffix of speech the backend has recognized since
+  // the last update, because the backend re-transcribes the full
+  // recording on every live update rather than sending only new text.
+  //
+  // livePartialTextRef: mirror of the current partial (gray) text.
+  // Partial text is always provisional, so it is always safe to let
+  // the backend replace it, edited or not.
+  const isLiveTranscriptEditedRef = useRef(false);
   const liveUserCommittedTextRef = useRef('');
-  const liveDisplayedPartialTextRef = useRef('');
+  const backendCommittedBaselineRef = useRef('');
+  const livePartialTextRef = useRef('');
 
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>(() => {
     try {
@@ -206,11 +223,23 @@ function App() {
     }
   }, [savedSessions]);
 
+  const resetLiveState = useCallback(() => {
+    isLiveTranscriptEditedRef.current = false;
+    liveUserCommittedTextRef.current = '';
+    backendCommittedBaselineRef.current = '';
+    livePartialTextRef.current = '';
+
+    setIsLiveTranscriptEdited(false);
+    setLiveCommittedText('');
+    setLivePartialText('');
+  }, []);
+
   const openSavedSession = useCallback(
     (session: SavedSession) => {
       if (isRecording || isProcessing) {
         return;
       }
+
       setActiveSessionId(session.id);
       setRawText(session.rawText);
       setEditedRawText(session.rawText);
@@ -224,13 +253,13 @@ function App() {
             ? 'recording'
             : 'audio-file'
       );
-      setLiveTranscript('');
+      resetLiveState();
       setError(null);
       setIsCopied(false);
       setIsCleaningWithLLM(false);
       setRecordingSeconds(0);
     },
-    [isProcessing, isRecording]
+    [isProcessing, isRecording, resetLiveState]
   );
 
   const saveChanges = useCallback(() => {
@@ -254,6 +283,7 @@ function App() {
           : session
       )
     );
+
     setSaveMessage('Saved');
 
     window.setTimeout(() => {
@@ -280,14 +310,14 @@ function App() {
         setCleanedText(null);
         setSessionFilename(null);
         setSessionInputType(null);
-        setLiveTranscript('');
+        resetLiveState();
         setError(null);
         setIsCopied(false);
         setIsCleaningWithLLM(false);
         setRecordingSeconds(0);
       }
     },
-    [activeSessionId]
+    [activeSessionId, resetLiveState]
   );
 
   useEffect(() => {
@@ -309,7 +339,6 @@ function App() {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
-
         console.error('Failed to load system prompt:', err);
 
         if (mounted) {
@@ -338,9 +367,7 @@ function App() {
       setRecordingSeconds((seconds) => seconds + 1);
     }, 1000);
 
-    return () => {
-      window.clearInterval(intervalId);
-    };
+    return () => window.clearInterval(intervalId);
   }, [isRecording]);
 
   const cleanupAudioCapture = useCallback(async () => {
@@ -396,9 +423,7 @@ function App() {
         }
 
         const cleaned = data.text || '';
-
         setCleanedText(cleaned);
-
         return cleaned;
       } catch (err) {
         console.error('LLM cleaning failed:', err);
@@ -472,7 +497,6 @@ function App() {
         }
 
         setActiveSessionId(newSession.id);
-
         return [newSession, ...currentSessions];
       });
 
@@ -505,13 +529,9 @@ function App() {
         }
 
         const data = (await response.json()) as TranscriptionResponse;
-
-        const transcript = data.text || '';
-
-        await processFinalTranscript(transcript, filename);
+        await processFinalTranscript(data.text || '', filename);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
-
         console.error('Audio processing failed:', err);
         setError(`Processing failed: ${message}`);
         setIsCleaningWithLLM(false);
@@ -539,45 +559,12 @@ function App() {
     let recordingStopped = false;
 
     isStoppingRecordingRef.current = false;
-    liveCommittedDisplayedTextRef.current = '';
-    livePartialDisplayedTextRef.current = '';
-    liveCommittedTextRef.current = '';
-    livePartialTextRef.current = '';
-    liveBackendTextRef.current = '';
-    liveEditBaseRef.current = null;
-    editableLiveTranscriptRef.current = '';
-    shouldRestoreLiveSelectionRef.current = false;
-    liveUserCommittedTextRef.current = '';
-    liveDisplayedPartialTextRef.current = '';
-
-    recordingSourceKeyRef.current = `recording:${crypto.randomUUID()}`;
-
-    setLiveTranscript('');
-    setEditableLiveTranscript('');
-    setIsLiveTranscriptEdited(false);
-    isLiveTranscriptEditedRef.current = false;
+    resetLiveState();
     setRecordingSeconds(0);
     setSessionFilename('recording.webm');
     setSessionInputType('recording');
 
-    const resetLiveTranscriptState = () => {
-      liveCommittedTextRef.current = '';
-      livePartialTextRef.current = '';
-      liveBackendTextRef.current = '';
-      liveEditBaseRef.current = null;
-      editableLiveTranscriptRef.current = '';
-      liveCommittedDisplayedTextRef.current = '';
-      livePartialDisplayedTextRef.current = '';
-      shouldRestoreLiveSelectionRef.current = false;
-      isStoppingRecordingRef.current = false;
-      liveUserCommittedTextRef.current = '';
-      liveDisplayedPartialTextRef.current = '';
-
-      setLiveTranscript('');
-      setEditableLiveTranscript('');
-      setIsLiveTranscriptEdited(false);
-      isLiveTranscriptEditedRef.current = false;
-    };
+    recordingSourceKeyRef.current = `recording:${crypto.randomUUID()}`;
 
     const closeSocket = () => {
       if (!socket) {
@@ -654,187 +641,80 @@ function App() {
             return;
           }
 
-          const data = event.data;
-
-          console.log('📨 RAW WEBSOCKET EVENT', {
-            dataType: typeof data,
-            data,
-          });
-
           try {
-            const message = JSON.parse(data) as {
+            const message = JSON.parse(event.data) as {
               type: string;
               text?: string;
               committed_text?: string;
               partial_text?: string;
-              segments?: Array<{
-                start?: number;
-                end?: number;
-                text?: string;
-              }>;
             };
 
             if (message.type === 'transcript') {
-              const committedText =
+              const backendCommittedText =
                 typeof message.committed_text === 'string'
                   ? message.committed_text
                   : '';
-
               const partialText =
                 typeof message.partial_text === 'string'
                   ? message.partial_text
                   : '';
 
-              const segmentText = (message.segments ?? [])
-                .map((segment) =>
-                  typeof segment.text === 'string' ? segment.text.trim() : ''
-                )
-                .filter(Boolean)
-                .join(' ')
-                .trim();
+              // Partial (gray) text is always provisional. The backend
+              // is always allowed to replace it, whether or not the
+              // user has edited the committed text.
+              livePartialTextRef.current = partialText;
+              setLivePartialText(partialText);
 
-              const nextBackendText = composeLiveTranscript(
-                committedText,
-                partialText
-              );
-
-              const previousBackendText = liveBackendTextRef.current;
-
-              const backendSnapshotAdvanced =
-                nextBackendText.trim() !== previousBackendText.trim();
-
-              const currentEditedText = editableLiveTranscriptRef.current;
-
-              console.log('🧪 TRANSCRIPT CONTRACT', {
-                committedText,
-                partialText,
-                segmentText,
-                segments: message.segments,
-                previousBackendText,
-                nextBackendText,
-                editBase: liveEditBaseRef.current,
-                currentEditedText,
-                isEdited: isLiveTranscriptEditedRef.current,
-              });
-
-              console.log('🔎 LIVE TRANSCRIPT UPDATE', {
-                previousBackendText,
-                nextBackendText,
-                currentEditedText,
-                committedText,
-                partialText,
-                isEdited: isLiveTranscriptEditedRef.current,
-                backendChanged: nextBackendText !== previousBackendText,
-                isPrefix: nextBackendText.startsWith(previousBackendText),
-              });
-
-              if (liveEditBaseRef.current === null) {
-                const textarea = liveTextareaRef.current;
-
-                if (textarea && document.activeElement === textarea) {
-                  liveSelectionRef.current = {
-                    start: textarea.selectionStart,
-                    end: textarea.selectionEnd,
-                    direction: textarea.selectionDirection,
-                  };
-
-                  shouldRestoreLiveSelectionRef.current = true;
-                }
-
-                editableLiveTranscriptRef.current = nextBackendText;
-
-                liveUserCommittedTextRef.current = nextBackendText;
-
-                liveDisplayedPartialTextRef.current = partialText;
-
-                liveBackendTextRef.current = nextBackendText;
-
-                setEditableLiveTranscript(nextBackendText);
-                setLiveTranscript(nextBackendText);
-
-                liveCommittedTextRef.current = committedText;
-
-                livePartialTextRef.current = partialText;
-
-                liveCommittedDisplayedTextRef.current = committedText;
-
+              if (!isLiveTranscriptEditedRef.current) {
+                liveUserCommittedTextRef.current = backendCommittedText;
+                backendCommittedBaselineRef.current = backendCommittedText;
+                setLiveCommittedText(backendCommittedText);
                 return;
               }
 
-              let nextEditedText = currentEditedText;
+              const baselineWordCount = normalizeForCompare(
+                backendCommittedBaselineRef.current
+              )
+                .split(' ')
+                .filter(Boolean).length;
 
-              if (
-                isLiveTranscriptEditedRef.current &&
-                backendSnapshotAdvanced
-              ) {
-                const existingText = editableLiveTranscriptRef.current.trim();
+              const incomingWords = normalizeForCompare(backendCommittedText)
+                .split(' ')
+                .filter(Boolean);
 
-                const previousPartial = livePartialTextRef.current.trim();
+              if (incomingWords.length > baselineWordCount) {
+                const newSuffix = incomingWords
+                  .slice(baselineWordCount)
+                  .join(' ')
+                  .trim();
 
-                const nextPartial = partialText.trim();
+                if (newSuffix) {
+                  const updatedCommittedText = joinNonEmpty(
+                    liveUserCommittedTextRef.current,
+                    newSuffix
+                  );
 
-                let editedCommittedText = existingText;
-
-                if (previousPartial && existingText.endsWith(previousPartial)) {
-                  editedCommittedText = existingText
-                    .slice(0, existingText.length - previousPartial.length)
-                    .trim();
+                  liveUserCommittedTextRef.current = updatedCommittedText;
+                  setLiveCommittedText(updatedCommittedText);
                 }
 
-                nextEditedText = [editedCommittedText, nextPartial]
-                  .filter(Boolean)
-                  .join(' ');
-              } else if (!isLiveTranscriptEditedRef.current) {
-                nextEditedText = nextBackendText;
+                backendCommittedBaselineRef.current = backendCommittedText;
               }
-
-              if (nextEditedText !== currentEditedText) {
-                const textarea = liveTextareaRef.current;
-
-                if (textarea && document.activeElement === textarea) {
-                  liveSelectionRef.current = {
-                    start: textarea.selectionStart,
-                    end: textarea.selectionEnd,
-                    direction: textarea.selectionDirection,
-                  };
-
-                  shouldRestoreLiveSelectionRef.current = true;
-                }
-
-                editableLiveTranscriptRef.current = nextEditedText;
-
-                setEditableLiveTranscript(nextEditedText);
-              }
-
-              liveCommittedTextRef.current = committedText;
-
-              livePartialTextRef.current = partialText;
-
-              liveCommittedDisplayedTextRef.current = committedText;
-
-              liveDisplayedPartialTextRef.current = partialText;
-
-              liveBackendTextRef.current = nextBackendText;
-
-              setLiveTranscript(nextBackendText);
+              // If word count did not grow, do nothing and keep the existing
+              // baseline — we'll re-check on the next update rather than risk
+              // misaligning text on a transcription that shrank or stayed flat.
             }
 
             if (message.type === 'final') {
               const backendFinalText =
                 typeof message.text === 'string' ? message.text : '';
 
-              const editedLiveText = editableLiveTranscriptRef.current.trim();
-
               const finalText = isLiveTranscriptEditedRef.current
-                ? editedLiveText
+                ? joinNonEmpty(
+                    liveUserCommittedTextRef.current,
+                    livePartialTextRef.current
+                  )
                 : backendFinalText;
-
-              console.log('✅ FINAL WEBSOCKET MESSAGE RECEIVED', {
-                backendText: backendFinalText,
-                selectedText: finalText,
-                usedEditedText: isLiveTranscriptEditedRef.current,
-                length: finalText.length,
-              });
 
               setIsProcessing(true);
 
@@ -851,7 +731,7 @@ function App() {
                   setError(`Processing failed: ${errorMessage}`);
                 })
                 .finally(() => {
-                  resetLiveTranscriptState();
+                  resetLiveState();
                   setIsProcessing(false);
                 });
             }
@@ -860,19 +740,11 @@ function App() {
           }
         };
 
-        socket.onerror = (event) => {
-          console.error('WebSocket error:', event);
-
+        socket.onerror = () => {
           rejectOnce(new Error('Could not connect to live transcription.'));
         };
 
         socket.onclose = (event) => {
-          console.log('WebSocket closed:', {
-            code: event.code,
-            reason: event.reason,
-            clean: event.wasClean,
-          });
-
           if (liveSocketRef.current === socket) {
             liveSocketRef.current = null;
           }
@@ -913,13 +785,6 @@ function App() {
       const displayVideoTracks = displayStream.getVideoTracks();
       const desktopTracks = displayStream.getAudioTracks();
 
-      console.log('Display capture result:', {
-        videoTracks: displayVideoTracks.length,
-        audioTracks: desktopTracks.length,
-        audioTrackStates: desktopTracks.map((track) => track.readyState),
-        audioTrackSettings: desktopTracks.map((track) => track.getSettings()),
-      });
-
       if (includeMicrophone) {
         microphoneStream = await navigator.mediaDevices.getUserMedia({
           audio: {
@@ -931,15 +796,6 @@ function App() {
       }
 
       const microphoneTracks = microphoneStream?.getAudioTracks() ?? [];
-
-      console.log('Microphone capture result:', {
-        enabled: includeMicrophone,
-        audioTracks: microphoneTracks.length,
-        audioTrackStates: microphoneTracks.map((track) => track.readyState),
-        audioTrackSettings: microphoneTracks.map((track) =>
-          track.getSettings()
-        ),
-      });
 
       if (includeMicrophone && microphoneTracks.length === 0) {
         throw new Error('No microphone audio track was captured.');
@@ -971,9 +827,7 @@ function App() {
       }
 
       const destination = audioContext.createMediaStreamDestination();
-
       const pcmProcessor = new AudioWorkletNode(audioContext, 'pcm-processor');
-
       let pcmBuffer = new Uint8Array(0);
 
       pcmProcessor.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
@@ -982,7 +836,6 @@ function App() {
         }
 
         const incoming = new Uint8Array(event.data);
-
         const combined = new Uint8Array(pcmBuffer.length + incoming.length);
 
         combined.set(pcmBuffer);
@@ -1005,8 +858,6 @@ function App() {
           try {
             socketToSend.send(pcmBuffer.slice(0, chunkSize));
             pcmBuffer = pcmBuffer.slice(chunkSize);
-
-            console.log('Sent buffered PCM:', chunkSize);
           } catch (error) {
             console.error('Could not send PCM data:', error);
             break;
@@ -1016,7 +867,6 @@ function App() {
 
       const silentGain = audioContext.createGain();
       silentGain.gain.value = 0;
-
       pcmProcessor.connect(silentGain);
       silentGain.connect(audioContext.destination);
 
@@ -1034,37 +884,18 @@ function App() {
 
       if (liveDesktopTracks.length > 0) {
         const desktopStream = new MediaStream(liveDesktopTracks);
-
         const desktopSource =
           audioContext.createMediaStreamSource(desktopStream);
 
         desktopSource.connect(destination);
         desktopSource.connect(pcmProcessor);
-
-        console.log('Desktop audio connected.');
-      } else {
-        console.log(
-          'No live desktop-audio track was returned. Recording microphone only.'
-        );
       }
 
-      const destinationAudioTracks = destination.stream.getAudioTracks();
-
-      console.log('Mixed audio destination:', {
-        audioTracks: destinationAudioTracks.length,
-        audioTrackStates: destinationAudioTracks.map(
-          (track) => track.readyState
-        ),
-      });
-
-      if (destinationAudioTracks.length === 0) {
+      if (destination.stream.getAudioTracks().length === 0) {
         throw new Error('The mixed audio stream contains no audio tracks.');
       }
 
       const mimeType = getSupportedMimeType();
-
-      console.log('Selected MediaRecorder MIME type:', mimeType);
-
       const recorder = mimeType
         ? new MediaRecorder(destination.stream, {
             mimeType,
@@ -1077,7 +908,6 @@ function App() {
       mediaRecorderRef.current = recorder;
       chunksRef.current = [];
       audioContextRef.current = audioContext;
-
       activeStreamsRef.current = [
         displayStream,
         ...(microphoneStream ? [microphoneStream] : []),
@@ -1089,9 +919,7 @@ function App() {
         }
       };
 
-      recorder.onerror = (event: Event) => {
-        console.error('MediaRecorder error:', event);
-
+      recorder.onerror = () => {
         setError('The browser recorder encountered an error.');
         setIsRecording(false);
         setIsProcessing(false);
@@ -1130,79 +958,24 @@ function App() {
       setIsRecording(true);
     } catch (err) {
       closeSocket();
-
-      console.error('Audio capture failed:', err);
-
-      displayStream?.getTracks().forEach((track) => {
-        track.stop();
-      });
-
-      microphoneStream?.getTracks().forEach((track) => {
-        track.stop();
-      });
-
-      if (audioContext) {
-        try {
-          await audioContext.close();
-        } catch (closeError) {
-          console.error(
-            'Failed to close audio context after capture error:',
-            closeError
-          );
-        }
-      }
-
-      audioContextRef.current = null;
-      activeStreamsRef.current = [];
+      await cleanupAudioCapture();
       mediaRecorderRef.current = null;
-
       setIsRecording(false);
       setIsProcessing(false);
 
       const message = err instanceof Error ? err.message : 'Unknown error';
-
-      if (err instanceof DOMException) {
-        if (err.name === 'NotAllowedError') {
-          setError(
-            'Microphone permission was denied or screen sharing was cancelled.'
-          );
-        } else if (err.name === 'AbortError') {
-          setError('Screen sharing was cancelled.');
-        } else if (err.name === 'NotFoundError') {
-          setError('No microphone or audio capture device was found.');
-        } else if (err.name === 'NotReadableError') {
-          setError('The selected audio device is busy or unavailable.');
-        } else if (err.name === 'InvalidStateError') {
-          setError(
-            'The browser could not create an audio source from the selected desktop audio.'
-          );
-        } else {
-          setError(`Audio capture failed: ${err.name}: ${message}`);
-        }
-      } else {
-        setError(`Audio capture failed: ${message}`);
-      }
+      setError(`Audio capture failed: ${message}`);
     }
   }, [
     cleanupAudioCapture,
-    getSupportedMimeType,
     includeMicrophone,
     isProcessing,
     isRecording,
     processFinalTranscript,
+    resetLiveState,
   ]);
 
   const stopRecording = useCallback(() => {
-    console.log(
-      'stopRecording called',
-      'socket:',
-      liveSocketRef.current,
-      'socketState:',
-      liveSocketRef.current?.readyState,
-      'recorderState:',
-      mediaRecorderRef.current?.state
-    );
-
     const recorder = mediaRecorderRef.current;
     const socket = liveSocketRef.current;
 
@@ -1214,22 +987,14 @@ function App() {
 
     try {
       if (socket?.readyState === WebSocket.OPEN) {
-        console.log('Sending stop message to WebSocket');
-
-        socket.send(
-          JSON.stringify({
-            type: 'stop',
-          })
-        );
+        socket.send(JSON.stringify({ type: 'stop' }));
       }
 
       recorder.stop();
-
       setIsRecording(false);
       setIsProcessing(true);
     } catch (error) {
       console.error('Failed to stop recording:', error);
-
       isStoppingRecordingRef.current = false;
       setIsRecording(false);
       setIsProcessing(false);
@@ -1241,39 +1006,28 @@ function App() {
 
   const processAudioFile = useCallback(
     (file: File) => {
-      if (!file) {
-        return;
-      }
-
-      if (!file.type.startsWith('audio/')) {
+      if (!file || !file.type.startsWith('audio/')) {
         setError('Please select a valid audio file.');
         return;
       }
 
       setError(null);
       setRawText(null);
+      setEditedRawText('');
       setCleanedText(null);
       setIsCleaningWithLLM(false);
       setRecordingSeconds(0);
       setSessionFilename(file.name);
       setSessionInputType('audio-file');
+      resetLiveState();
 
-      const audioBlob = new Blob([file], {
-        type: file.type,
-      });
-
-      void uploadAudio(audioBlob, file.name);
+      void uploadAudio(new Blob([file], { type: file.type }), file.name);
     },
-    [uploadAudio]
+    [resetLiveState, uploadAudio]
   );
 
-  const handleDragEnter = useCallback(() => {
-    setIsDragging(true);
-  }, []);
-
-  const handleDragLeave = useCallback(() => {
-    setIsDragging(false);
-  }, []);
+  const handleDragEnter = useCallback(() => setIsDragging(true), []);
+  const handleDragLeave = useCallback(() => setIsDragging(false), []);
 
   const handleDrop = useCallback(
     (file: File) => {
@@ -1309,6 +1063,7 @@ function App() {
 
       setError(null);
       setRawText(text);
+      setEditedRawText(text);
       setCleanedText(null);
       setIsCleaningWithLLM(false);
       setIsProcessing(true);
@@ -1335,10 +1090,25 @@ function App() {
       .catch((err: unknown) => {
         const message =
           err instanceof Error ? err.message : 'Unknown clipboard error';
-
         setError(`Copy failed: ${message}`);
       });
   }, []);
+
+  const handleLiveTranscriptChange = (
+    event: React.ChangeEvent<HTMLTextAreaElement>
+  ) => {
+    const nextCommittedText = event.currentTarget.value;
+
+    // Marking this ref true synchronously is what protects the user's
+    // edit: any WebSocket message handled after this point in the
+    // event loop will see isLiveTranscriptEditedRef.current === true
+    // and will stop overwriting the committed text directly.
+    isLiveTranscriptEditedRef.current = true;
+    setIsLiveTranscriptEdited(true);
+
+    liveUserCommittedTextRef.current = nextCommittedText;
+    setLiveCommittedText(nextCommittedText);
+  };
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1347,7 +1117,6 @@ function App() {
       }
 
       const target = event.target as HTMLElement | null;
-
       const isTyping =
         target?.tagName === 'INPUT' ||
         target?.tagName === 'TEXTAREA' ||
@@ -1405,70 +1174,6 @@ function App() {
     };
   }, []);
 
-  const rememberLiveSelection = () => {
-    const textarea = liveTextareaRef.current;
-
-    if (!textarea) {
-      return;
-    }
-
-    liveSelectionRef.current = {
-      start: textarea.selectionStart,
-      end: textarea.selectionEnd,
-      direction: textarea.selectionDirection,
-    };
-  };
-
-  const handleLiveTranscriptChange = (
-    event: React.ChangeEvent<HTMLTextAreaElement>
-  ) => {
-    const textarea = event.currentTarget;
-    const nextValue = textarea.value;
-
-    shouldRestoreLiveSelectionRef.current = false;
-
-    liveSelectionRef.current = {
-      start: textarea.selectionStart,
-      end: textarea.selectionEnd,
-      direction: textarea.selectionDirection,
-    };
-
-    if (liveEditBaseRef.current === null) {
-      liveEditBaseRef.current = liveBackendTextRef.current;
-    }
-
-    editableLiveTranscriptRef.current = nextValue;
-    liveUserCommittedTextRef.current = nextValue;
-
-    setIsLiveTranscriptEdited(true);
-    isLiveTranscriptEditedRef.current = true;
-    setEditableLiveTranscript(nextValue);
-  };
-
-  useLayoutEffect(() => {
-    if (!shouldRestoreLiveSelectionRef.current) {
-      return;
-    }
-
-    const textarea = liveTextareaRef.current;
-
-    if (!textarea || document.activeElement !== textarea) {
-      shouldRestoreLiveSelectionRef.current = false;
-      return;
-    }
-
-    const { start, end, direction } = liveSelectionRef.current;
-    const valueLength = textarea.value.length;
-
-    textarea.setSelectionRange(
-      Math.min(start, valueLength),
-      Math.min(end, valueLength),
-      direction
-    );
-
-    shouldRestoreLiveSelectionRef.current = false;
-  }, [editableLiveTranscript]);
-
   const selectedMeeting =
     MEETING_OPTIONS.find((option) => option.value === meetingType) ??
     MEETING_OPTIONS.find((option) => option.value === 'general')!;
@@ -1483,24 +1188,12 @@ function App() {
     if (isRecording || isProcessing) {
       return;
     }
-    liveCommittedTextRef.current = '';
-    livePartialTextRef.current = '';
-    liveBackendTextRef.current = '';
-    liveEditBaseRef.current = null;
-    editableLiveTranscriptRef.current = '';
-    liveCommittedDisplayedTextRef.current = '';
-    livePartialDisplayedTextRef.current = '';
-    isLiveTranscriptEditedRef.current = false;
-    liveUserCommittedTextRef.current = '';
-    liveDisplayedPartialTextRef.current = '';
 
     setActiveSessionId(null);
     setRawText(null);
     setEditedRawText('');
     setCleanedText(null);
-    setLiveTranscript('');
-    setEditableLiveTranscript('');
-    setIsLiveTranscriptEdited(false);
+    resetLiveState();
     setError(null);
     setIsCopied(false);
     setIsCleaningWithLLM(false);
@@ -1552,14 +1245,12 @@ function App() {
 
             <nav className={styles.navGroup} aria-label="Workspace">
               <div className={styles.navLabel}>Workspace</div>
-
               <button
                 className={`${styles.navItem} ${styles.navItemActive}`}
                 type="button"
               >
                 Capture
               </button>
-
               <button className={styles.navItem} type="button">
                 Current transcript
               </button>
@@ -1567,7 +1258,6 @@ function App() {
 
             <nav className={styles.navGroup} aria-label="Library">
               <div className={styles.navLabel}>Library</div>
-
               <button className={styles.navItem} type="button">
                 Recent sessions
               </button>
@@ -1592,12 +1282,10 @@ function App() {
                         <div className={styles.recentSessionFilename}>
                           {session.filename}
                         </div>
-
                         <div className={styles.recentSessionDate}>
                           {formatSessionDate(session.createdAt)}
                         </div>
                       </button>
-
                       <button
                         className={styles.deleteSessionButton}
                         type="button"
@@ -1628,7 +1316,6 @@ function App() {
               <div className={styles.cardHeader}>
                 <div>
                   <h1 className={styles.cardTitle}>Capture a meeting</h1>
-
                   <p className={styles.cardDescription}>
                     Record your computer and microphone audio, or upload an
                     existing file.
@@ -1644,7 +1331,6 @@ function App() {
                     onStartRecording={startRecording}
                     onStopRecording={stopRecording}
                   />
-
                   {isRecording && (
                     <div className={styles.recordingTimer} aria-live="polite">
                       <span className={styles.recordingIndicator} />
@@ -1671,7 +1357,6 @@ function App() {
                   Use an existing text transcript
                   <span aria-hidden="true">⌄</span>
                 </summary>
-
                 <div className={styles.textInputContent}>
                   <TextInputZone
                     isProcessing={isProcessing}
@@ -1685,7 +1370,6 @@ function App() {
               <div className={styles.cardHeader}>
                 <div>
                   <h2 className={styles.cardTitle}>Processing setup</h2>
-
                   <p className={styles.cardDescription}>
                     Choose how the transcript should be organized.
                   </p>
@@ -1694,7 +1378,6 @@ function App() {
 
               <div className={styles.setupGroup}>
                 <div className={styles.setupLabel}>Meeting preset</div>
-
                 <div
                   className={styles.meetingOptions}
                   role="radiogroup"
@@ -1702,7 +1385,6 @@ function App() {
                 >
                   {MEETING_OPTIONS.map((option) => {
                     const selected = meetingType === option.value;
-
                     return (
                       <button
                         key={option.value}
@@ -1717,7 +1399,6 @@ function App() {
                         <span className={styles.meetingOptionLabel}>
                           {option.label}
                         </span>
-
                         <span
                           className={styles.meetingOptionCheck}
                           aria-hidden="true"
@@ -1733,11 +1414,9 @@ function App() {
                   <div className={styles.selectedMeetingTitle}>
                     {selectedMeeting.label}
                   </div>
-
                   <div className={styles.selectedMeetingDescription}>
                     {selectedMeeting.description}
                   </div>
-
                   <div className={styles.selectedMeetingSections}>
                     {selectedMeeting.sections}
                   </div>
@@ -1748,13 +1427,11 @@ function App() {
               <div className={styles.cleanupRow}>
                 <div>
                   <div className={styles.configLabel}>Include microphone</div>
-
                   <div className={styles.configHint}>
                     Capture your microphone together with the selected desktop
                     audio.
                   </div>
                 </div>
-
                 <button
                   type="button"
                   role="switch"
@@ -1776,13 +1453,11 @@ function App() {
                   <div className={styles.configLabel}>
                     Clean transcript with AI
                   </div>
-
                   <div className={styles.configHint}>
                     Remove filler words, repair grammar, and organize the
                     transcript into useful engineering sections.
                   </div>
                 </div>
-
                 <button
                   type="button"
                   role="switch"
@@ -1808,12 +1483,10 @@ function App() {
                     <span className={styles.promptToggleTitle}>
                       Customize AI instructions
                     </span>
-
                     <span className={styles.promptToggleHint}>
                       Edit the full system prompt used for cleanup.
                     </span>
                   </span>
-
                   <span
                     className={`${styles.promptChevron} ${
                       isPromptOpen ? styles.promptChevronOpen : ''
@@ -1836,12 +1509,10 @@ function App() {
                           <span className={styles.promptEditorLabel}>
                             System prompt
                           </span>
-
                           <span className={styles.promptCharacterCount}>
                             {systemPrompt.length.toLocaleString()} characters
                           </span>
                         </div>
-
                         <textarea
                           className={styles.promptEditor}
                           value={systemPrompt}
@@ -1850,12 +1521,10 @@ function App() {
                           }
                           aria-label="AI system prompt"
                         />
-
                         <div className={styles.promptEditorFooter}>
                           <span className={styles.promptEditorNote}>
                             Changes apply to the next transcript you process.
                           </span>
-
                           <button
                             type="button"
                             className={styles.restoreButton}
@@ -1885,61 +1554,60 @@ function App() {
               <div className={styles.cardHeader}>
                 <div>
                   <h2 className={styles.cardTitle}>Review your meeting</h2>
-
                   <p className={styles.cardDescription}>
                     Compare the original transcript with the structured recap.
                   </p>
                 </div>
               </div>
-              {(liveTranscript || editableLiveTranscript) && (
-                <div
-                  style={{
-                    marginBottom: '16px',
-                    padding: '14px',
-                    border: '1px solid rgba(139, 193, 255, 0.25)',
-                    borderRadius: '11px',
-                    color: '#dce9f8',
-                    background: 'rgba(5, 17, 32, 0.45)',
-                    lineHeight: 1.6,
-                  }}
-                >
-                  <div
-                    style={{
-                      marginBottom: '8px',
-                      color: '#8bc1ff',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                    }}
-                  >
-                    Live transcript ·{' '}
-                    {isLiveTranscriptEdited ? 'edited' : 'updating'}
+
+              {(isRecording || liveCommittedText || livePartialText) && (
+                <div className={liveStyles.liveTranscript} aria-live="polite">
+                  <div className={liveStyles.header}>
+                    <div className={liveStyles.title}>Live transcript</div>
+                    {isRecording && (
+                      <div className={liveStyles.status}>Listening…</div>
+                    )}
+                    {isLiveTranscriptEdited && (
+                      <div className={liveStyles.status}>Edited</div>
+                    )}
                   </div>
 
-                  <textarea
-                    ref={liveTextareaRef}
-                    value={editableLiveTranscript}
-                    onChange={handleLiveTranscriptChange}
-                    onSelect={rememberLiveSelection}
-                    onKeyUp={rememberLiveSelection}
-                    onClick={rememberLiveSelection}
-                    disabled={!isRecording}
-                    rows={6}
-                    aria-label="Editable live transcript"
-                    style={{
-                      width: '100%',
-                      boxSizing: 'border-box',
-                      padding: '10px',
-                      border: '1px solid rgba(139, 193, 255, 0.2)',
-                      borderRadius: '8px',
-                      background: 'rgba(5, 17, 32, 0.3)',
-                      color: '#dce9f8',
-                      font: 'inherit',
-                      lineHeight: 1.6,
-                      resize: 'vertical',
-                    }}
-                  />
+                  <div className={liveStyles.transcriptLine}>
+                    <textarea
+                      ref={liveTextareaRef}
+                      value={liveCommittedText}
+                      onChange={handleLiveTranscriptChange}
+                      rows={4}
+                      aria-label="Committed live transcript"
+                      className={liveStyles.committedEditor}
+                    />
+
+                    {livePartialText && (
+                      <span
+                        className={liveStyles.partialText}
+                        aria-label="Provisional text, still being transcribed"
+                      >
+                        {liveCommittedText ? ' ' : ''}
+                        {livePartialText}
+                      </span>
+                    )}
+                  </div>
+
+                  {!liveCommittedText && !livePartialText && isRecording && (
+                    <div className={liveStyles.emptyText}>
+                      Waiting for speech…
+                    </div>
+                  )}
+
+                  {isRecording && (
+                    <div className={liveStyles.notice}>
+                      Faded text is still being transcribed and cannot be edited
+                      yet.
+                    </div>
+                  )}
                 </div>
               )}
+
               <TranscriptionResults
                 rawText={rawText}
                 editedRawText={editedRawText}
@@ -1958,17 +1626,15 @@ function App() {
           <aside className={styles.sessionPanel} aria-label="Current session">
             <section className={styles.sessionCard}>
               <h2 className={styles.sessionCardTitle}>Current session</h2>
-
               {sessionFilename ? (
                 <>
                   <input
                     className={styles.sessionFilenameInput}
-                    value={sessionFilename ?? ''}
+                    value={sessionFilename}
                     onChange={(event) => setSessionFilename(event.target.value)}
                     placeholder="Session name"
                     aria-label="Session name"
                   />
-
                   <button
                     type="button"
                     className={styles.saveChangesButton}
@@ -1980,7 +1646,6 @@ function App() {
                   {saveMessage && (
                     <span className={styles.saveMessage}>{saveMessage}</span>
                   )}
-
                   <div className={styles.sessionMeta}>
                     {sessionInputType === 'recording'
                       ? 'Audio recording'
@@ -1988,7 +1653,6 @@ function App() {
                         ? 'Uploaded audio file'
                         : 'Pasted transcript'}
                   </div>
-
                   {sessionInputType === 'recording' && (
                     <div className={styles.sessionDuration}>
                       {formatDuration(recordingSeconds)}
@@ -2005,19 +1669,16 @@ function App() {
 
             <section className={styles.sessionCard}>
               <h2 className={styles.sessionCardTitle}>Processing pipeline</h2>
-
               <div className={styles.pipeline}>
                 <PipelineStep
                   label="Audio captured"
                   complete={isRecording || isProcessing || Boolean(rawText)}
                 />
-
                 <PipelineStep
                   label="Transcription"
                   active={isProcessing}
                   complete={!isProcessing && Boolean(rawText)}
                 />
-
                 <PipelineStep
                   label="AI cleanup"
                   active={isCleaningWithLLM}
@@ -2025,7 +1686,6 @@ function App() {
                     Boolean(cleanedText) || (Boolean(rawText) && !useLLM)
                   }
                 />
-
                 <PipelineStep
                   label="Review ready"
                   complete={
