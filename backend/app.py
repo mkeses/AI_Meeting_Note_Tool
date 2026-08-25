@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import math
 import os
 import tempfile
 from contextlib import asynccontextmanager
@@ -43,18 +44,44 @@ async def lifespan(app: FastAPI):
 
     print("🚀 Starting AI Transcript App...")
 
+    whisper_model = os.getenv("WHISPER_MODEL")
+    llm_base_url = os.getenv("LLM_BASE_URL")
+    llm_api_key = os.getenv("LLM_API_KEY")
+    llm_model = os.getenv("LLM_MODEL")
+
+    missing_values = [
+        name
+        for name, value in {
+            "WHISPER_MODEL": whisper_model,
+            "LLM_BASE_URL": llm_base_url,
+            "LLM_API_KEY": llm_api_key,
+            "LLM_MODEL": llm_model,
+        }.items()
+        if not value
+    ]
+
+    if missing_values:
+        raise RuntimeError(
+            "Missing required environment variables: " + ", ".join(missing_values)
+        )
+
     service = TranscriptionService(
-        whisper_model=os.getenv("WHISPER_MODEL"),
-        llm_base_url=os.getenv("LLM_BASE_URL"),
-        llm_api_key=os.getenv("LLM_API_KEY"),
-        llm_model=os.getenv("LLM_MODEL"),
+        whisper_model=whisper_model,
+        llm_base_url=llm_base_url,
+        llm_api_key=llm_api_key,
+        llm_model=llm_model,
     )
 
     print("✅ Ready!")
-    yield
+
+    try:
+        yield
+    finally:
+        service = None
 
 
 app = FastAPI(title="AI Transcript App", lifespan=lifespan)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -95,26 +122,34 @@ async def transcribe_audio(audio: Annotated[UploadFile, File()]):
         )
 
     suffix = os.path.splitext(audio.filename or "")[1] or ".webm"
-
-    with tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=suffix,
-    ) as tmp:
-        content = await audio.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+    tmp_path: str | None = None
 
     try:
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=suffix,
+        ) as tmp:
+            content = await audio.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+
         raw_text = service.transcribe(tmp_path)
-        return {"success": True, "text": raw_text}
+
+        return {
+            "success": True,
+            "text": raw_text,
+        }
+
     except Exception as error:
         print(f"❌ Transcription error: {error}")
+
         raise HTTPException(
             status_code=500,
             detail=f"Transcription failed: {error}",
         ) from error
+
     finally:
-        if os.path.exists(tmp_path):
+        if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
 
@@ -129,9 +164,15 @@ async def clean_text(request: CleanRequest):
             system_prompt=request.system_prompt,
             meeting_type=request.meeting_type,
         )
-        return {"success": True, "text": cleaned_text}
+
+        return {
+            "success": True,
+            "text": cleaned_text,
+        }
+
     except Exception as error:
         print(f"❌ LLM cleaning failed: {error}")
+
         raise HTTPException(
             status_code=502,
             detail="LLM cleaning failed. Check the backend terminal for details.",
@@ -225,14 +266,38 @@ async def transcribe_chunk_segments(
 
 
 def normalized_segment_text(segment: Segment) -> str:
-    return " ".join(str(segment["text"]).split()).lower().strip()
+    return " ".join(str(segment["text"]).split()).lower().strip(" .,!?;:")
 
 
 def segments_match(left: Segment, right: Segment) -> bool:
     return (
         normalized_segment_text(left) == normalized_segment_text(right)
-        and abs(float(left["start"]) - float(right["start"])) <= 0.25
+        and abs(float(left["start"]) - float(right["start"])) <= 0.35
     )
+
+
+def chunk_has_speech(
+    audio_data: bytes,
+    threshold: float = 350.0,
+) -> bool:
+    """Return whether a PCM16 chunk contains enough energy to be speech."""
+    samples = np.frombuffer(audio_data, dtype=np.int16)
+
+    if samples.size == 0:
+        return False
+
+    samples_float = samples.astype(np.float32)
+    rms = float(np.sqrt(np.mean(np.square(samples_float))))
+
+    return math.isfinite(rms) and rms >= threshold
+
+
+def segment_text(segments: list[Segment]) -> str:
+    return " ".join(
+        str(segment["text"]).strip()
+        for segment in segments
+        if str(segment["text"]).strip()
+    ).strip()
 
 
 @app.websocket("/ws/transcribe")
@@ -251,10 +316,17 @@ async def transcribe_websocket(websocket: WebSocket):
     previous_live_segments: list[Segment] = []
     committed_live_segments: list[Segment] = []
 
+    last_audio_was_speech = False
+    silent_chunks = 0
+
+    # PCM chunks are approximately 0.33 seconds at 48 kHz.
+    pause_flush_chunks = 4
+
     async def send_live_transcript(
         chunks: list[bytes],
         previous_segments: list[Segment],
         committed_segments: list[Segment],
+        force_commit: bool = False,
     ) -> tuple[list[Segment], list[Segment]]:
         try:
             segments = await transcribe_chunk_segments(chunks)
@@ -262,82 +334,62 @@ async def transcribe_websocket(websocket: WebSocket):
             if not segments:
                 return previous_segments, committed_segments
 
-            def normalized_text(segment: Segment) -> str:
-                return " ".join(str(segment["text"]).split()).lower().strip(" .,!?;:")
-
-            def matches(
-                left: Segment,
-                right: Segment,
-            ) -> bool:
-                return (
-                    normalized_text(left) == normalized_text(right)
-                    and abs(float(left["start"]) - float(right["start"])) <= 0.35
-                )
-
-            previous_count = len(previous_segments)
-            committed_count = len(committed_segments)
-
             stable_count = 0
 
-            for previous, current in zip(
-                previous_segments,
-                segments,
-            ):
-                if matches(previous, current):
+            for previous, current in zip(previous_segments, segments):
+                if segments_match(previous, current):
                     stable_count += 1
                 else:
                     break
 
+            committed_count = len(committed_segments)
+
             committed_prefix_is_present = committed_count <= len(segments) and all(
-                matches(
+                segments_match(
                     committed_segment,
                     segments[index],
                 )
                 for index, committed_segment in enumerate(committed_segments)
             )
 
-            if committed_count == 0:
+            if force_commit:
+                next_committed_segments = segments
+
+            elif committed_count == 0:
                 next_committed_segments = segments[:stable_count]
+
             elif committed_prefix_is_present:
                 next_committed_count = max(
                     committed_count,
                     stable_count,
                 )
-
                 next_committed_segments = segments[:next_committed_count]
+
             else:
-                # Whisper changed an already committed prefix.
-                # Preserve the old committed state and do not
-                # expose the rewritten prefix as partial text.
+                # Whisper changed a committed prefix. Keep the previously
+                # committed state rather than exposing duplicate rewritten text.
                 next_committed_segments = committed_segments
 
-            committed_count = len(next_committed_segments)
+            next_committed_count = len(next_committed_segments)
 
-            if committed_count <= len(segments):
-                partial_segments = segments[committed_count:]
+            if next_committed_count <= len(segments):
+                partial_segments = segments[next_committed_count:]
             else:
-                # The current Whisper result no longer contains
-                # the committed prefix. Preserve committed output
-                # and expose no potentially duplicated partial.
                 partial_segments = []
 
-            committed_text = " ".join(
-                str(segment["text"]).strip() for segment in next_committed_segments
-            ).strip()
-
-            partial_text = " ".join(
-                str(segment["text"]).strip() for segment in partial_segments
-            ).strip()
+            committed_text = segment_text(next_committed_segments)
+            partial_text = segment_text(partial_segments)
 
             print(
                 "📌 BACKEND OUTPUT",
                 {
                     "committed_text": committed_text,
                     "partial_text": partial_text,
-                    "previous_count": previous_count,
+                    "previous_count": len(previous_segments),
                     "stable_count": stable_count,
-                    "committed_count": committed_count,
+                    "committed_count": next_committed_count,
                     "partial_count": len(partial_segments),
+                    "force_commit": force_commit,
                     "committed_prefix_is_present": (committed_prefix_is_present),
                 },
             )
@@ -353,9 +405,58 @@ async def transcribe_websocket(websocket: WebSocket):
 
             return segments, next_committed_segments
 
+        except WebSocketDisconnect:
+            raise
+
         except Exception as error:
             print(f"Live transcription failed: {error}")
             return previous_segments, committed_segments
+
+    async def finish_live_task() -> None:
+        nonlocal live_transcription_task
+        nonlocal previous_live_segments
+        nonlocal committed_live_segments
+
+        if live_transcription_task is None:
+            return
+
+        if not live_transcription_task.done():
+            await live_transcription_task
+
+        try:
+            (
+                previous_live_segments,
+                committed_live_segments,
+            ) = live_transcription_task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as error:
+            print(f"Live transcription task failed: {error}")
+        finally:
+            live_transcription_task = None
+
+    async def schedule_live_transcription(
+        force_commit: bool = False,
+    ) -> None:
+        nonlocal live_transcription_task
+        nonlocal last_live_transcription_bytes
+
+        if live_transcription_task is not None:
+            if not live_transcription_task.done():
+                return
+
+            await finish_live_task()
+
+        last_live_transcription_bytes = total_bytes
+
+        live_transcription_task = asyncio.create_task(
+            send_live_transcript(
+                audio_chunks.copy(),
+                previous_live_segments,
+                committed_live_segments,
+                force_commit=force_commit,
+            )
+        )
 
     try:
         while True:
@@ -375,13 +476,17 @@ async def transcribe_websocket(websocket: WebSocket):
                 except json.JSONDecodeError:
                     continue
 
-                if payload.get("type") == "start":
+                message_type = payload.get("type")
+
+                if message_type == "start":
                     started = True
                     audio_chunks.clear()
                     total_bytes = 0
                     last_live_transcription_bytes = 0
                     previous_live_segments = []
                     committed_live_segments = []
+                    last_audio_was_speech = False
+                    silent_chunks = 0
 
                     if live_transcription_task is not None:
                         live_transcription_task.cancel()
@@ -398,7 +503,7 @@ async def transcribe_websocket(websocket: WebSocket):
                         }
                     )
 
-                elif payload.get("type") == "stop":
+                elif message_type == "stop":
                     print("Stop received; transcribing buffered audio")
                     break
 
@@ -406,41 +511,52 @@ async def transcribe_websocket(websocket: WebSocket):
                 audio_chunks.append(audio_data)
                 total_bytes += len(audio_data)
 
-                print(f"Received PCM bytes: {len(audio_data)} (total: {total_bytes})")
+                has_speech = chunk_has_speech(audio_data)
+
+                if has_speech:
+                    last_audio_was_speech = True
+                    silent_chunks = 0
+                else:
+                    silent_chunks += 1
+
+                print(
+                    f"Received PCM bytes: {len(audio_data)} "
+                    f"(total: {total_bytes}, speech: {has_speech}, "
+                    f"silent_chunks: {silent_chunks})"
+                )
 
                 bytes_since_last_live = total_bytes - last_live_transcription_bytes
 
-                if bytes_since_last_live >= 160_000:
-                    last_live_transcription_bytes = total_bytes
+                pause_detected = (
+                    last_audio_was_speech and silent_chunks >= pause_flush_chunks
+                )
 
-                    if (
-                        live_transcription_task is None
-                        or live_transcription_task.done()
-                    ):
-                        if live_transcription_task is not None:
-                            (
-                                previous_live_segments,
-                                committed_live_segments,
-                            ) = live_transcription_task.result()
+                should_transcribe_live = (
+                    bytes_since_last_live >= 160_000 or pause_detected
+                )
 
-                        live_transcription_task = asyncio.create_task(
-                            send_live_transcript(
-                                audio_chunks.copy(),
-                                previous_live_segments,
-                                committed_live_segments,
-                            )
-                        )
+                if should_transcribe_live:
+                    await schedule_live_transcription(
+                        force_commit=pause_detected,
+                    )
+
+                    if pause_detected:
+                        last_audio_was_speech = False
+                        silent_chunks = 0
 
     except WebSocketDisconnect:
         print("Live transcription client disconnected")
+        return
+
     except Exception as error:
         print(f"Live transcription connection closed: {error}")
 
-    if live_transcription_task is not None:
-        live_transcription_task.cancel()
+    finally:
+        if live_transcription_task is not None:
+            live_transcription_task.cancel()
 
-        with contextlib.suppress(asyncio.CancelledError):
-            await live_transcription_task
+            with contextlib.suppress(asyncio.CancelledError):
+                await live_transcription_task
 
     print(
         "Receive loop ended: "
@@ -468,6 +584,8 @@ async def transcribe_websocket(websocket: WebSocket):
             {
                 "type": "final",
                 "text": result,
+                "committed_text": result,
+                "partial_text": "",
             }
         )
 
@@ -479,6 +597,9 @@ async def transcribe_websocket(websocket: WebSocket):
         )
 
         print("WebSocket closed after final transcript")
+
+    except WebSocketDisconnect:
+        print("Client disconnected before final transcript was sent")
 
     except Exception as error:
         print("Could not send final transcript or close WebSocket: " f"{error}")
