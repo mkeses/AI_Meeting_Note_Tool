@@ -4,6 +4,7 @@ import json
 import math
 import os
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -33,8 +34,43 @@ class CleanRequest(BaseModel):
 
 
 Segment = dict[str, float | str]
+Word = dict[str, float | str]
 
 service: TranscriptionService | None = None
+
+# --- Live transcription windowing constants ---
+
+SAMPLE_RATE = 48_000
+BYTES_PER_SAMPLE = 2
+BYTES_PER_SECOND = SAMPLE_RATE * BYTES_PER_SAMPLE  # 96_000
+
+LIVE_CHUNK_BYTES = 16_000
+
+OVERLAP_SECONDS = 1.5
+OVERLAP_BYTES = int(OVERLAP_SECONDS * BYTES_PER_SECOND)
+
+WORD_START_TOLERANCE_SECONDS = 0.15
+
+MAX_PARTIAL_SECONDS = 12.0
+MAX_PARTIAL_BYTES = int(MAX_PARTIAL_SECONDS * BYTES_PER_SECOND)
+
+LIVE_TRIGGER_BYTES = 160_000
+
+PAUSE_FLUSH_CHUNKS = 4
+
+MIN_COMMIT_SECONDS = 0.8
+MIN_COMMIT_BYTES = int(MIN_COMMIT_SECONDS * BYTES_PER_SECOND)
+
+LONG_PAUSE_FLUSH_CHUNKS = 12  # roughly 2 seconds of silence
+
+# Faster-Whisper's default VAD requires ~250ms of continuous speech
+# before treating something as real speech. Short function words (e.g.
+# "to", "a", "is") spoken quickly - especially when isolated by nearby
+# pauses - can fall under that threshold and get silently dropped
+# before Whisper ever sees them. Lowering this makes VAD more permissive
+# about short words while leaving silence-detection settings untouched
+# (those are what prevent hallucination during long pauses).
+LIVE_VAD_PARAMETERS = {"min_speech_duration_ms": 100}
 
 
 @asynccontextmanager
@@ -180,6 +216,8 @@ async def clean_text(request: CleanRequest):
 
 
 async def transcribe_chunks(audio_chunks: list[bytes]) -> str:
+    """Full, one-time transcription of the entire recording, used only
+    once at the end of a session."""
     if service is None or not audio_chunks:
         return ""
 
@@ -200,7 +238,8 @@ async def transcribe_chunks(audio_chunks: list[bytes]) -> str:
             beam_size=1,
             best_of=1,
             condition_on_previous_text=False,
-            vad_filter=False,
+            vad_filter=True,
+            vad_parameters=LIVE_VAD_PARAMETERS,
         )
 
         text = " ".join(
@@ -218,22 +257,32 @@ async def transcribe_chunks(audio_chunks: list[bytes]) -> str:
     return await asyncio.to_thread(transcribe_pcm)
 
 
-async def transcribe_chunk_segments(
+async def transcribe_chunk_words(
     audio_chunks: list[bytes],
-) -> list[Segment]:
+) -> tuple[list[Segment], list[Word]]:
+    """Transcribe a small, windowed list of PCM chunks. Returns both
+    whole segments (kept for the outgoing message / debugging) and a
+    flat list of individual words with their own start/end timestamps,
+    used for precise boundary cropping in send_live_transcript."""
     if service is None or not audio_chunks:
-        return []
+        return [], []
 
     pcm_bytes = b"".join(audio_chunks)
 
-    def transcribe_pcm_segments() -> list[Segment]:
+    def transcribe_pcm_segments() -> tuple[list[Segment], list[Word]]:
         if service is None:
-            return []
+            return [], []
+
+        resample_start = time.monotonic()
 
         audio_48k = (
             np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
         )
         audio_16k = resample_poly(audio_48k, 1, 3).astype(np.float32)
+
+        resample_elapsed = time.monotonic() - resample_start
+
+        whisper_start = time.monotonic()
 
         segments, _info = service.whisper.transcribe(
             audio_16k,
@@ -241,46 +290,64 @@ async def transcribe_chunk_segments(
             beam_size=1,
             best_of=1,
             condition_on_previous_text=False,
-            vad_filter=False,
+            vad_filter=True,
+            vad_parameters=LIVE_VAD_PARAMETERS,
+            word_timestamps=True,
         )
 
-        results: list[Segment] = []
+        segments = list(segments)
+
+        whisper_elapsed = time.monotonic() - whisper_start
+
+        buffer_seconds = len(pcm_bytes) / BYTES_PER_SECOND
+
+        print(
+            "⏱️ LIVE TRANSCRIBE TIMING "
+            f"window={buffer_seconds:.1f}s "
+            f"resample={resample_elapsed:.2f}s "
+            f"whisper={whisper_elapsed:.2f}s "
+            f"total={resample_elapsed + whisper_elapsed:.2f}s"
+        )
+
+        result_segments: list[Segment] = []
+        result_words: list[Word] = []
 
         for segment in segments:
             text = segment.text.strip()
 
-            if not text:
-                continue
+            if text:
+                result_segments.append(
+                    {
+                        "start": float(segment.start),
+                        "end": float(segment.end),
+                        "text": text,
+                    }
+                )
 
-            results.append(
-                {
-                    "start": float(segment.start),
-                    "end": float(segment.end),
-                    "text": text,
-                }
-            )
+            if segment.words:
+                for word in segment.words:
+                    word_text = word.word.strip()
 
-        return results
+                    if not word_text:
+                        continue
+
+                    result_words.append(
+                        {
+                            "start": float(word.start),
+                            "end": float(word.end),
+                            "text": word_text,
+                        }
+                    )
+
+        return result_segments, result_words
 
     return await asyncio.to_thread(transcribe_pcm_segments)
-
-
-def normalized_segment_text(segment: Segment) -> str:
-    return " ".join(str(segment["text"]).split()).lower().strip(" .,!?;:")
-
-
-def segments_match(left: Segment, right: Segment) -> bool:
-    return (
-        normalized_segment_text(left) == normalized_segment_text(right)
-        and abs(float(left["start"]) - float(right["start"])) <= 0.35
-    )
 
 
 def chunk_has_speech(
     audio_data: bytes,
     threshold: float = 350.0,
 ) -> bool:
-    """Return whether a PCM16 chunk contains enough energy to be speech."""
     samples = np.frombuffer(audio_data, dtype=np.int16)
 
     if samples.size == 0:
@@ -292,12 +359,14 @@ def chunk_has_speech(
     return math.isfinite(rms) and rms >= threshold
 
 
-def segment_text(segments: list[Segment]) -> str:
+def words_text(words: list[Word]) -> str:
     return " ".join(
-        str(segment["text"]).strip()
-        for segment in segments
-        if str(segment["text"]).strip()
+        str(word["text"]).strip() for word in words if str(word["text"]).strip()
     ).strip()
+
+
+def join_non_empty(*parts: str) -> str:
+    return " ".join(part.strip() for part in parts if part.strip()).strip()
 
 
 @app.websocket("/ws/transcribe")
@@ -309,113 +378,125 @@ async def transcribe_websocket(websocket: WebSocket):
     started = False
     last_live_transcription_bytes = 0
 
-    live_transcription_task: (
-        asyncio.Task[tuple[list[Segment], list[Segment]]] | None
-    ) = None
+    committed_text = ""
+    committed_audio_bytes = 0
 
-    previous_live_segments: list[Segment] = []
-    committed_live_segments: list[Segment] = []
+    live_transcription_task: asyncio.Task[tuple[str, int]] | None = None
 
     last_audio_was_speech = False
     silent_chunks = 0
-
-    # PCM chunks are approximately 0.33 seconds at 48 kHz.
-    pause_flush_chunks = 4
+    pending_speech_since_last_live = False
+    pause_checked_this_silence = False
 
     async def send_live_transcript(
-        chunks: list[bytes],
-        previous_segments: list[Segment],
-        committed_segments: list[Segment],
-        force_commit: bool = False,
-    ) -> tuple[list[Segment], list[Segment]]:
+        chunks_snapshot: list[bytes],
+        current_committed_text: str,
+        current_committed_audio_bytes: int,
+        force_commit: bool,
+        total_bytes_snapshot: int,
+    ) -> tuple[str, int]:
         try:
-            segments = await transcribe_chunk_segments(chunks)
-
-            if not segments:
-                return previous_segments, committed_segments
-
-            stable_count = 0
-
-            for previous, current in zip(previous_segments, segments):
-                if segments_match(previous, current):
-                    stable_count += 1
-                else:
-                    break
-
-            committed_count = len(committed_segments)
-
-            committed_prefix_is_present = committed_count <= len(segments) and all(
-                segments_match(
-                    committed_segment,
-                    segments[index],
-                )
-                for index, committed_segment in enumerate(committed_segments)
+            window_start_bytes = max(
+                0,
+                current_committed_audio_bytes - OVERLAP_BYTES,
             )
+            start_chunk_index = window_start_bytes // LIVE_CHUNK_BYTES
+            window_chunks = chunks_snapshot[start_chunk_index:]
 
-            if force_commit:
-                next_committed_segments = segments
+            if not window_chunks:
+                return current_committed_text, current_committed_audio_bytes
 
-            elif committed_count == 0:
-                next_committed_segments = segments[:stable_count]
+            window_start_seconds = (
+                start_chunk_index * LIVE_CHUNK_BYTES
+            ) / BYTES_PER_SECOND
 
-            elif committed_prefix_is_present:
-                next_committed_count = max(
-                    committed_count,
-                    stable_count,
+            segments, words = await transcribe_chunk_words(window_chunks)
+
+            if not words:
+                return current_committed_text, current_committed_audio_bytes
+
+            committed_audio_seconds = current_committed_audio_bytes / BYTES_PER_SECOND
+
+            new_words = [
+                word
+                for word in words
+                if (float(word["start"]) + window_start_seconds)
+                >= committed_audio_seconds - WORD_START_TOLERANCE_SECONDS
+            ]
+
+            new_text = words_text(new_words)
+
+            uncommitted_bytes = total_bytes_snapshot - current_committed_audio_bytes
+            should_force_commit = force_commit or uncommitted_bytes >= MAX_PARTIAL_BYTES
+
+            if should_force_commit and new_words:
+                # Only advance the committed boundary to the END of the
+                # last fully-recognized word, never to the raw edge of
+                # the window. A force-commit (especially the
+                # elapsed-time-based MAX_PARTIAL one) can otherwise cut
+                # off mid-word; advancing only as far as confirmed
+                # speech leaves any trailing, possibly-incomplete audio
+                # "pending" so the next window gets a full, uncut
+                # attempt at it instead of losing it permanently.
+                last_word_end_seconds = (
+                    float(new_words[-1]["end"]) + window_start_seconds
                 )
-                next_committed_segments = segments[:next_committed_count]
+                last_word_end_bytes = int(last_word_end_seconds * BYTES_PER_SECOND)
 
+                next_committed_text = join_non_empty(
+                    current_committed_text,
+                    new_text,
+                )
+                next_committed_audio_bytes = max(
+                    current_committed_audio_bytes,
+                    last_word_end_bytes,
+                )
+                partial_text = ""
+            elif should_force_commit:
+                # Force-commit requested but nothing new was actually
+                # recognized (e.g. trailing silence only) - nothing to
+                # advance, leave the boundary where it is.
+                next_committed_text = current_committed_text
+                next_committed_audio_bytes = current_committed_audio_bytes
+                partial_text = ""
             else:
-                # Whisper changed a committed prefix. Keep the previously
-                # committed state rather than exposing duplicate rewritten text.
-                next_committed_segments = committed_segments
-
-            next_committed_count = len(next_committed_segments)
-
-            if next_committed_count <= len(segments):
-                partial_segments = segments[next_committed_count:]
-            else:
-                partial_segments = []
-
-            committed_text = segment_text(next_committed_segments)
-            partial_text = segment_text(partial_segments)
+                next_committed_text = current_committed_text
+                next_committed_audio_bytes = current_committed_audio_bytes
+                partial_text = new_text
 
             print(
                 "📌 BACKEND OUTPUT",
                 {
-                    "committed_text": committed_text,
+                    "committed_text": next_committed_text,
                     "partial_text": partial_text,
-                    "previous_count": len(previous_segments),
-                    "stable_count": stable_count,
-                    "committed_count": next_committed_count,
-                    "partial_count": len(partial_segments),
+                    "new_word_count": len(new_words),
                     "force_commit": force_commit,
-                    "committed_prefix_is_present": (committed_prefix_is_present),
+                    "max_partial_forced": (should_force_commit and not force_commit),
                 },
             )
 
             await websocket.send_json(
                 {
                     "type": "transcript",
-                    "committed_text": committed_text,
+                    "committed_text": next_committed_text,
                     "partial_text": partial_text,
                     "segments": segments,
                 }
             )
 
-            return segments, next_committed_segments
+            return next_committed_text, next_committed_audio_bytes
 
         except WebSocketDisconnect:
             raise
 
         except Exception as error:
             print(f"Live transcription failed: {error}")
-            return previous_segments, committed_segments
+            return current_committed_text, current_committed_audio_bytes
 
     async def finish_live_task() -> None:
         nonlocal live_transcription_task
-        nonlocal previous_live_segments
-        nonlocal committed_live_segments
+        nonlocal committed_text
+        nonlocal committed_audio_bytes
 
         if live_transcription_task is None:
             return
@@ -424,10 +505,7 @@ async def transcribe_websocket(websocket: WebSocket):
             await live_transcription_task
 
         try:
-            (
-                previous_live_segments,
-                committed_live_segments,
-            ) = live_transcription_task.result()
+            committed_text, committed_audio_bytes = live_transcription_task.result()
         except asyncio.CancelledError:
             pass
         except Exception as error:
@@ -435,28 +513,32 @@ async def transcribe_websocket(websocket: WebSocket):
         finally:
             live_transcription_task = None
 
-    async def schedule_live_transcription(
-        force_commit: bool = False,
-    ) -> None:
+    async def schedule_live_transcription(force_commit: bool = False) -> bool:
         nonlocal live_transcription_task
         nonlocal last_live_transcription_bytes
+        nonlocal pending_speech_since_last_live
 
         if live_transcription_task is not None:
             if not live_transcription_task.done():
-                return
+                print("⏭️ SKIPPED live transcription — previous task still running")
+                return False
 
             await finish_live_task()
 
         last_live_transcription_bytes = total_bytes
+        pending_speech_since_last_live = False
 
         live_transcription_task = asyncio.create_task(
             send_live_transcript(
                 audio_chunks.copy(),
-                previous_live_segments,
-                committed_live_segments,
-                force_commit=force_commit,
+                committed_text,
+                committed_audio_bytes,
+                force_commit,
+                total_bytes,
             )
         )
+
+        return True
 
     try:
         while True:
@@ -483,10 +565,12 @@ async def transcribe_websocket(websocket: WebSocket):
                     audio_chunks.clear()
                     total_bytes = 0
                     last_live_transcription_bytes = 0
-                    previous_live_segments = []
-                    committed_live_segments = []
+                    committed_text = ""
+                    committed_audio_bytes = 0
                     last_audio_was_speech = False
                     silent_chunks = 0
+                    pending_speech_since_last_live = False
+                    pause_checked_this_silence = False
 
                     if live_transcription_task is not None:
                         live_transcription_task.cancel()
@@ -516,33 +600,47 @@ async def transcribe_websocket(websocket: WebSocket):
                 if has_speech:
                     last_audio_was_speech = True
                     silent_chunks = 0
+                    pending_speech_since_last_live = True
+                    pause_checked_this_silence = False
                 else:
                     silent_chunks += 1
 
-                print(
-                    f"Received PCM bytes: {len(audio_data)} "
-                    f"(total: {total_bytes}, speech: {has_speech}, "
-                    f"silent_chunks: {silent_chunks})"
-                )
-
                 bytes_since_last_live = total_bytes - last_live_transcription_bytes
+                uncommitted_bytes = total_bytes - committed_audio_bytes
 
                 pause_detected = (
-                    last_audio_was_speech and silent_chunks >= pause_flush_chunks
+                    last_audio_was_speech and silent_chunks >= PAUSE_FLUSH_CHUNKS
                 )
 
-                should_transcribe_live = (
-                    bytes_since_last_live >= 160_000 or pause_detected
+                should_force_commit_now = pause_detected and (
+                    uncommitted_bytes >= MIN_COMMIT_BYTES
+                    or silent_chunks >= LONG_PAUSE_FLUSH_CHUNKS
                 )
+
+                routine_trigger = (
+                    bytes_since_last_live >= LIVE_TRIGGER_BYTES
+                    and pending_speech_since_last_live
+                )
+
+                pause_trigger = pause_detected and (
+                    not pause_checked_this_silence
+                    or silent_chunks >= LONG_PAUSE_FLUSH_CHUNKS
+                )
+
+                should_transcribe_live = routine_trigger or pause_trigger
 
                 if should_transcribe_live:
-                    await schedule_live_transcription(
-                        force_commit=pause_detected,
+                    was_scheduled = await schedule_live_transcription(
+                        force_commit=should_force_commit_now,
                     )
 
-                    if pause_detected:
+                    if was_scheduled and pause_detected:
+                        pause_checked_this_silence = True
+
+                    if should_force_commit_now and was_scheduled:
                         last_audio_was_speech = False
                         silent_chunks = 0
+                        pause_checked_this_silence = False
 
     except WebSocketDisconnect:
         print("Live transcription client disconnected")
