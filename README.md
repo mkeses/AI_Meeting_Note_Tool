@@ -1,60 +1,53 @@
-# Signal Notes
+# AI Meeting Note Tool
 
-A local-first AI transcription app for turning meeting audio into clean, structured notes.
-
-Signal Notes records microphone and desktop audio in the browser, transcribes recordings with Whisper, and optionally cleans and organizes the transcript with an OpenAI-compatible language model.
-
-## Features
-
-- Browser-based microphone and desktop-audio recording.
-- Upload existing audio files.
-- Local speech-to-text transcription with Whisper.
-- Optional AI cleanup for filler-word removal, grammar correction, and organization.
-- Meeting presets for general meetings, design reviews, debugging sessions, and standups.
-- Customizable cleanup system prompt.
-- One-click transcript copying.
-- OpenAI-compatible LLM support through Ollama, LM Studio, OpenAI, or another compatible provider.
-- Dev Container setup for reproducible development.
+A local-first meeting transcription and note-taking app. Records audio, transcribes it live using Whisper, and generates structured meeting notes/summaries using a local LLM.
 
 ## Architecture
 
-```text
-Browser
-  ├── React + TypeScript frontend
-  ├── Microphone and desktop-audio capture
-  └── Audio upload
-        ↓
-FastAPI backend
-  ├── Whisper transcription
-  └── LLM-based transcript cleanup
+```
+┌─────────────────┐        WebSocket / REST        ┌──────────────────────┐
+│   Frontend       │ ◄─────────────────────────────► │  Backend (FastAPI)   │
+│  React + TS +    │                                 │  - Live transcription│
+│  Vite            │                                 │    (Whisper, CUDA)   │
+│                  │                                 │  - Summarization     │
+│  - Audio capture │                                 │    (local LLM)       │
+│  - Live transcript view (committed vs partial)     │  - Meeting storage   │
+│  - Meeting list / edit / rename / save             └──────────────────────┘
+└─────────────────┘
 ```
 
-The browser records audio only. Screen video is requested by the browser's screen-capture API when desktop audio is selected, but it is not included in the recorded file.
+**Key design points:**
 
-## Requirements
+- Live transcription uses a **windowed, word-level commit architecture**: audio is processed in a bounded rolling window (not full re-transcription) to avoid quadratic slowdown on long recordings.
+- Commit boundaries only advance to the end of a fully recognized word, avoiding mid-word cuts.
+- Pause detection (via PCM energy) force-commits segments during silence, gated on actual detected speech to avoid Whisper hallucination.
+- The frontend separates **committed (editable)** transcript text from **partial (read-only)** live text, and protects user edits from being overwritten by incoming WebSocket updates using word-count diffing.
 
-For the recommended setup:
+## Project structure
 
-- Docker Desktop.
-- VS Code.
-- The VS Code Dev Containers extension.
-- A browser with microphone and screen-capture support, such as Chrome or Edge.
+```
+backend/
+  app.py              # FastAPI app: WebSocket + REST endpoints
+  transcription.py     # Whisper-based windowed live transcription logic
+  system_prompt.txt    # LLM prompt for meeting note/summary generation
+  pyproject.toml       # Python deps, managed with uv
+  .env.example         # Required environment variables (copy to .env)
 
-For manual setup:
+frontend/
+  src/
+    App.tsx             # Main app shell
+    audio/              # Audio capture / recording logic
+    components/         # UI components (recording controls, transcript view, etc.)
+    styles/             # Shared styles
+    types/              # Shared TypeScript types
+```
 
-- Python 3.12 or newer.
-- Node.js.
-- `uv`.
-- Ollama, LM Studio, OpenAI, or another OpenAI-compatible LLM provider.
+## Prerequisites
 
-## Development with Dev Containers
-
-1. Open the repository in VS Code.
-2. Run **Dev Containers: Reopen in Container** from the Command Palette.
-3. Wait for the container setup to complete.
-4. Open the application at [http://localhost:3000](http://localhost:3000).
-
-The Dev Container is the recommended development environment because it provides the backend and frontend dependencies in a consistent setup.
+- Python 3.10+ with [`uv`](https://github.com/astral-sh/uv) installed
+- Node.js 18+ and npm
+- NVIDIA GPU + CUDA (recommended for Whisper performance; CPU fallback possible but slower)
+- A local LLM runtime (e.g., Ollama or similar) for summarization — configure via `.env`
 
 ## Manual setup
 
@@ -109,23 +102,34 @@ Common provider options include:
 
 If LLM cleanup is disabled or unavailable, the app can still return the raw Whisper transcription.
 
-## Recording notes
+## Running a meeting
 
-- Microphone access must be allowed in the browser.
-- Desktop-audio availability depends on the browser, operating system, selected sharing surface, and output device.
-- For system audio, choose **Entire screen** and enable **Share system audio** when the browser provides that option.
-- Tab-audio capture is generally more widely supported than system-audio capture.
-- Some USB or Bluetooth output devices may not support browser system-audio loopback capture. If that occurs, try another output device or use an audio-routing solution.
+1. Start the backend and frontend as above.
+2. Open the frontend in your browser (default Vite port).
+3. Start a recording — audio streams to the backend over WebSocket for live transcription.
+4. Edit the committed transcript text at any time; your edits are preserved as new speech is recognized.
+5. Save, rename, or export the meeting once finished.
 
-## Project structure
+## Known limitations / in-progress areas
 
-```text
-.
-├── backend/       FastAPI API, transcription, and LLM cleanup
-├── frontend/      React and TypeScript interface
-└── .devcontainer/ Development container configuration
-```
+- `App.tsx` is currently a large single component; a component-level refactor is planned to improve maintainability.
+- No automated test suite yet for the transcription window/commit logic or the frontend edit-protection diffing — planned as part of the stabilization phase.
+- Backend currently runs locally only; no remote deployment or containerization yet.
+- No packaged desktop (Windows) or mobile (iOS) build yet — planned next.
 
-## Current status
+## Roadmap
 
-This is an actively developed personal project. The core recording, transcription, cleanup, upload, and review workflow is functional. Browser and operating-system differences may affect desktop-audio capture.
+- [ ] Componentize `App.tsx`
+- [ ] Add backend API/WebSocket contract docs
+- [ ] Add pytest tests for transcription window/commit + pause detection
+- [ ] Add Vitest tests for frontend edit-protection diffing
+- [ ] Dockerize backend
+- [ ] Package as Windows desktop app (Electron)
+- [ ] Deploy backend remotely + convert frontend to PWA
+- [ ] Package as iOS app (Capacitor)
+- [ ] Speaker diarization
+- [ ] Export to PDF/Markdown, meeting search/history
+
+## Contributing / development notes
+
+This is an actively evolving personal project. See commit history for recent fixes to live transcription pause handling and edit protection, which informed the current architecture described above.
