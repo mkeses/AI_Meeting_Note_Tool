@@ -119,7 +119,6 @@ If LLM cleanup is disabled or unavailable, the app can still return the raw Whis
 
 ## Roadmap
 
-- [ ] Componentize `App.tsx`
 - [ ] Add backend API/WebSocket contract docs
 - [ ] Add pytest tests for transcription window/commit + pause detection
 - [ ] Add Vitest tests for frontend edit-protection diffing
