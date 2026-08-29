@@ -700,4 +700,4 @@ async def transcribe_websocket(websocket: WebSocket):
         print("Client disconnected before final transcript was sent")
 
     except Exception as error:
-        print("Could not send final transcript or close WebSocket: " f"{error}")
+        print(f"Could not send final transcript or close WebSocket: {error}")

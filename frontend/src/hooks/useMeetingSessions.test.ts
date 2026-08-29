@@ -1,4 +1,5 @@
 import { renderHook, act } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMeetingSessions } from './useMeetingSessions';
 
 describe('useMeetingSessions', () => {
@@ -29,7 +30,7 @@ describe('useMeetingSessions', () => {
     const { result } = renderHook(() => useMeetingSessions());
 
     expect(result.current.savedSessions).toHaveLength(1);
-    expect(result.current.savedSessions[0].filename).toBe('Test meeting');
+    expect(result.current.savedSessions[0]?.filename).toBe('Test meeting');
   });
 
   it('adds a new session', () => {
@@ -50,7 +51,7 @@ describe('useMeetingSessions', () => {
     });
 
     expect(result.current.savedSessions).toHaveLength(1);
-    expect(result.current.savedSessions[0].filename).toBe('New meeting');
+    expect(result.current.savedSessions[0]?.filename).toBe('New meeting');
   });
 
   it('updates an existing session by sourceKey', () => {
@@ -68,7 +69,7 @@ describe('useMeetingSessions', () => {
 
     const { result } = renderHook(() => useMeetingSessions());
 
-    expect(result.current.savedSessions[0].filename).toBe('Old name');
+    expect(result.current.savedSessions[0]?.filename).toBe('Old name');
 
     const updatedSession = {
       ...existingSession,
@@ -81,7 +82,7 @@ describe('useMeetingSessions', () => {
     });
 
     expect(result.current.savedSessions).toHaveLength(1);
-    expect(result.current.savedSessions[0].filename).toBe('Updated name');
+    expect(result.current.savedSessions[0]?.filename).toBe('Updated name');
   });
 
   it('deletes a session', () => {

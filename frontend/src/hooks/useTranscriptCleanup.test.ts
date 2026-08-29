@@ -1,19 +1,30 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTranscriptCleanup } from './useTranscriptCleanup';
 
-// Mock fetch globally
-global.fetch = vi.fn();
+const fetchMock = vi.fn<typeof fetch>();
+
+function jsonResponse(body: object, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
 
 describe('useTranscriptCleanup', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('loads the system prompt on mount', async () => {
-    (global.fetch as any).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ default_prompt: 'Test prompt' }),
-    });
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ default_prompt: 'Test prompt' })
+    );
 
     const { result } = renderHook(() =>
       useTranscriptCleanup({ useLLM: true, meetingType: 'general' })
@@ -31,10 +42,9 @@ describe('useTranscriptCleanup', () => {
 
   it('does not call /api/clean when useLLM is false', async () => {
     // Mock the system prompt load (always happens on mount)
-    (global.fetch as any).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ default_prompt: 'Test prompt' }),
-    });
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ default_prompt: 'Test prompt' })
+    );
 
     const { result } = renderHook(() =>
       useTranscriptCleanup({ useLLM: false, meetingType: 'general' })
@@ -46,20 +56,22 @@ describe('useTranscriptCleanup', () => {
     });
 
     // Clear the mock so we only check for /api/clean calls
-    vi.clearAllMocks();
+    fetchMock.mockClear();
 
-    const cleaned = await result.current.cleanTranscription('Some text');
+    let cleaned = '';
+    await act(async () => {
+      cleaned = await result.current.cleanTranscription('Some text');
+    });
 
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(cleaned).toBe('');
   });
 
   it('calls /api/clean when cleaning is requested', async () => {
     // Mock the system prompt load
-    (global.fetch as any).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ default_prompt: 'Test prompt' }),
-    });
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ default_prompt: 'Test prompt' })
+    );
 
     const { result } = renderHook(() =>
       useTranscriptCleanup({ useLLM: true, meetingType: 'general' })
@@ -71,28 +83,33 @@ describe('useTranscriptCleanup', () => {
     });
 
     // Mock the /api/clean call
-    (global.fetch as any).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ success: true, text: 'Cleaned text' }),
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ success: true, text: 'Cleaned text' })
+    );
+
+    let cleaned = '';
+    await act(async () => {
+      cleaned = await result.current.cleanTranscription('Raw text');
     });
 
-    const cleaned = await result.current.cleanTranscription('Raw text');
+    const cleanRequest = fetchMock.mock.calls.find(
+      ([url]) => url === '/api/clean'
+    )?.[1];
 
-    expect(global.fetch).toHaveBeenCalledWith('/api/clean', {
+    expect(cleanRequest).toMatchObject({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: expect.stringContaining('Raw text'),
     });
+    expect(cleanRequest?.body).toEqual(expect.stringContaining('Raw text'));
 
     expect(cleaned).toBe('Cleaned text');
   });
 
   it('handles cleaning errors gracefully', async () => {
     // Mock the system prompt load
-    (global.fetch as any).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ default_prompt: 'Test prompt' }),
-    });
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ default_prompt: 'Test prompt' })
+    );
 
     const { result } = renderHook(() =>
       useTranscriptCleanup({ useLLM: true, meetingType: 'general' })
@@ -104,12 +121,12 @@ describe('useTranscriptCleanup', () => {
     });
 
     // Mock the /api/clean call to fail
-    (global.fetch as any).mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-    });
+    fetchMock.mockResolvedValueOnce(jsonResponse({}, 500));
 
-    const cleaned = await result.current.cleanTranscription('Raw text');
+    let cleaned = '';
+    await act(async () => {
+      cleaned = await result.current.cleanTranscription('Raw text');
+    });
 
     expect(cleaned).toBe('');
     // Error should be set after the failed call

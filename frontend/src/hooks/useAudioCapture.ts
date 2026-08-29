@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import { getTranscribeWebSocketUrl } from '../config';
 
 interface UseAudioCaptureOptions {
   includeMicrophone: boolean;
@@ -119,7 +120,7 @@ export function useAudioCapture({
       };
 
       try {
-        socket = new WebSocket('ws://localhost:8000/ws/transcribe');
+        socket = new WebSocket(getTranscribeWebSocketUrl());
 
         if (onSocketMessage) {
           socket.onmessage = onSocketMessage;
