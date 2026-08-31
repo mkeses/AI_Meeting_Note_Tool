@@ -28,13 +28,14 @@ fi
 
 echo "🐍 Installing Python dependencies with uv..."
 cd backend
-uv sync
+uv sync --extra dev
 cd ..
 echo "✅ Python dependencies installed"
 
 echo "📦 Installing frontend dependencies with npm..."
 cd frontend
-npm install
+sudo chown "$(id -u):$(id -g)" node_modules
+npm ci
 cd ..
 echo "✅ Frontend dependencies installed"
 

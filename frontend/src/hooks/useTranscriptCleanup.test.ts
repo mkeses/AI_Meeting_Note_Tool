@@ -19,6 +19,7 @@ describe('useTranscriptCleanup', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('loads the system prompt on mount', async () => {
@@ -67,19 +68,23 @@ describe('useTranscriptCleanup', () => {
     expect(cleaned).toBe('');
   });
 
-  it('calls /api/clean when cleaning is requested', async () => {
+  it('sends the configured prompt and meeting type when cleaning is requested', async () => {
     // Mock the system prompt load
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ default_prompt: 'Test prompt' })
     );
 
     const { result } = renderHook(() =>
-      useTranscriptCleanup({ useLLM: true, meetingType: 'general' })
+      useTranscriptCleanup({ useLLM: true, meetingType: 'design_review' })
     );
 
     // Wait for prompt to load
     await waitFor(() => {
       expect(result.current.isLoadingPrompt).toBe(false);
+    });
+
+    act(() => {
+      result.current.setSystemPrompt('Custom cleanup instructions');
     });
 
     // Mock the /api/clean call
@@ -92,17 +97,18 @@ describe('useTranscriptCleanup', () => {
       cleaned = await result.current.cleanTranscription('Raw text');
     });
 
-    const cleanRequest = fetchMock.mock.calls.find(
-      ([url]) => url === '/api/clean'
-    )?.[1];
-
-    expect(cleanRequest).toMatchObject({
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/clean', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: 'Raw text',
+        system_prompt: 'Custom cleanup instructions',
+        meeting_type: 'design_review',
+      }),
     });
-    expect(cleanRequest?.body).toEqual(expect.stringContaining('Raw text'));
 
     expect(cleaned).toBe('Cleaned text');
+    expect(result.current.isCleaningWithLLM).toBe(false);
   });
 
   it('handles cleaning errors gracefully', async () => {
@@ -134,5 +140,205 @@ describe('useTranscriptCleanup', () => {
       expect(result.current.error).toBeTruthy();
     });
     expect(result.current.error).toMatch(/LLM cleaning failed/);
+    expect(result.current.isCleaningWithLLM).toBe(false);
+  });
+
+  it('recovers from a system prompt load failure', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    fetchMock.mockRejectedValueOnce(new Error('Prompt service unavailable'));
+
+    const { result } = renderHook(() =>
+      useTranscriptCleanup({ useLLM: true, meetingType: 'general' })
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoadingPrompt).toBe(false);
+    });
+
+    expect(result.current.systemPrompt).toBe('');
+    expect(result.current.defaultSystemPrompt).toBe('');
+    expect(result.current.error).toBe(
+      'Failed to load system prompt: Prompt service unavailable'
+    );
+    expect(result.current.isCleaningWithLLM).toBe(false);
+  });
+
+  it('clears processing state when the backend reports success false', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ default_prompt: 'Test prompt' })
+    );
+
+    const { result } = renderHook(() =>
+      useTranscriptCleanup({ useLLM: true, meetingType: 'general' })
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoadingPrompt).toBe(false);
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ success: false, error: 'Cleanup model unavailable' })
+    );
+
+    let cleaned = 'unexpected';
+    await act(async () => {
+      cleaned = await result.current.cleanTranscription('Raw text');
+    });
+
+    expect(cleaned).toBe('');
+    expect(result.current.isCleaningWithLLM).toBe(false);
+    expect(result.current.error).toBe(
+      'LLM cleaning failed. Your transcription is unaffected — check the backend terminal for details.'
+    );
+  });
+
+  it('does not request cleanup for an empty transcript', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ default_prompt: 'Test prompt' })
+    );
+
+    const { result } = renderHook(() =>
+      useTranscriptCleanup({ useLLM: true, meetingType: 'general' })
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoadingPrompt).toBe(false);
+    });
+
+    fetchMock.mockClear();
+
+    let cleaned = 'unexpected';
+    await act(async () => {
+      cleaned = await result.current.cleanTranscription('   ');
+    });
+
+    expect(cleaned).toBe('');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.current.isCleaningWithLLM).toBe(false);
+  });
+
+  it('enters and leaves processing state around a successful cleanup', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ default_prompt: 'Test prompt' })
+    );
+
+    const { result } = renderHook(() =>
+      useTranscriptCleanup({ useLLM: true, meetingType: 'general' })
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoadingPrompt).toBe(false);
+    });
+
+    let resolveCleanup!: (response: Response) => void;
+    const cleanupResponse = new Promise<Response>((resolve) => {
+      resolveCleanup = resolve;
+    });
+    fetchMock.mockImplementationOnce(() => cleanupResponse);
+
+    let cleaningPromise!: Promise<string>;
+    act(() => {
+      cleaningPromise = result.current.cleanTranscription('Raw text');
+    });
+
+    expect(result.current.isCleaningWithLLM).toBe(true);
+
+    await act(async () => {
+      resolveCleanup(jsonResponse({ success: true, text: 'Cleaned text' }));
+      await cleaningPromise;
+    });
+
+    expect(result.current.isCleaningWithLLM).toBe(false);
+  });
+
+  it('allows cleanup to be regenerated after a previous cleanup completes', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ default_prompt: 'Test prompt' })
+    );
+
+    const { result } = renderHook(() =>
+      useTranscriptCleanup({ useLLM: true, meetingType: 'general' })
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoadingPrompt).toBe(false);
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ success: true, text: 'First cleanup' })
+    );
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ success: true, text: 'Second cleanup' })
+    );
+
+    await act(async () => {
+      await result.current.regenerateCleanup('First raw text');
+    });
+    await act(async () => {
+      await result.current.regenerateCleanup('Second raw text');
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/clean',
+      expect.objectContaining({
+        body: JSON.stringify({
+          text: 'First raw text',
+          system_prompt: 'Test prompt',
+          meeting_type: 'general',
+        }),
+      })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/clean',
+      expect.objectContaining({
+        body: JSON.stringify({
+          text: 'Second raw text',
+          system_prompt: 'Test prompt',
+          meeting_type: 'general',
+        }),
+      })
+    );
+    expect(result.current.isCleaningWithLLM).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('settles an in-flight cleanup safely after unmount', async () => {
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ default_prompt: 'Test prompt' })
+    );
+
+    const { result, unmount } = renderHook(() =>
+      useTranscriptCleanup({ useLLM: true, meetingType: 'general' })
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoadingPrompt).toBe(false);
+    });
+
+    let resolveCleanup!: (response: Response) => void;
+    const cleanupResponse = new Promise<Response>((resolve) => {
+      resolveCleanup = resolve;
+    });
+    fetchMock.mockImplementationOnce(() => cleanupResponse);
+
+    let cleaningPromise!: Promise<string>;
+    act(() => {
+      cleaningPromise = result.current.cleanTranscription('Raw text');
+    });
+
+    unmount();
+
+    await act(async () => {
+      resolveCleanup(jsonResponse({ success: true, text: 'Cleaned text' }));
+      await expect(cleaningPromise).resolves.toBe('Cleaned text');
+    });
+
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });

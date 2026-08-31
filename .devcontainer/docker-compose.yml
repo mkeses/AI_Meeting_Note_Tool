@@ -10,6 +10,11 @@ services:
 
     volumes:
       - ..:/workspaces/ai-transcript-app:cached
+      - type: volume
+        source: frontend_node_modules
+        target: /workspaces/ai-transcript-app/frontend/node_modules
+        volume:
+          nocopy: true
 
     environment:
       PYTHONUNBUFFERED: "1"
@@ -55,3 +60,4 @@ services:
 
 volumes:
   ai-transcript-ollama-models:
+  frontend_node_modules:

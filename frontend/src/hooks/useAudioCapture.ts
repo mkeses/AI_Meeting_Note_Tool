@@ -210,6 +210,7 @@ export function useAudioCapture({
           audio: true,
           systemAudio: 'include',
         } as DisplayMediaStreamOptions);
+        activeStreamsRef.current = [displayStream];
 
         const displayVideoTracks = displayStream.getVideoTracks();
         const desktopTracks = displayStream.getAudioTracks();
@@ -222,6 +223,7 @@ export function useAudioCapture({
               autoGainControl: true,
             },
           });
+          activeStreamsRef.current = [displayStream, microphoneStream];
         }
 
         const microphoneTracks = microphoneStream?.getAudioTracks() ?? [];
@@ -249,6 +251,7 @@ export function useAudioCapture({
           latencyHint: 'interactive',
           sampleRate: 48000,
         });
+        audioContextRef.current = audioContext;
 
         await audioContext.audioWorklet.addModule(
           '/src/audio/pcm-processor.ts'
@@ -355,10 +358,25 @@ export function useAudioCapture({
         };
 
         recorder.onerror = () => {
+          const isAlreadyStopping = isStoppingRecordingRef.current;
+          isStoppingRecordingRef.current = true;
+
+          if (
+            !isAlreadyStopping &&
+            liveSocketRef.current?.readyState === WebSocket.OPEN
+          ) {
+            liveSocketRef.current.send(JSON.stringify({ type: 'stop' }));
+          }
+
           onError('The browser recorder encountered an error.');
           setIsRecording(false);
           onRecordingStateChange(false);
           onProcessingStateChange(false);
+
+          if (recordingIntervalRef.current) {
+            window.clearInterval(recordingIntervalRef.current);
+            recordingIntervalRef.current = null;
+          }
         };
 
         recorder.onstop = async () => {
