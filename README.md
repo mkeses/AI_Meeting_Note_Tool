@@ -322,6 +322,8 @@ black
 │   ├── app.py
 │   ├── transcription.py
 │   ├── system_prompt.txt
+│   ├── Dockerfile
+│   ├── compose.yml
 │   ├── pyproject.toml
 │   └── .env.example
 │
@@ -493,6 +495,40 @@ Start FastAPI:
 ```bash
 uv run uvicorn app:app --reload --host 0.0.0.0 --port 8000 --timeout-keep-alive 600
 ```
+
+### Backend runtime container
+
+The Dev Container is for interactive development; `backend/Dockerfile` is a separate, non-root FastAPI runtime image. It reuses the established CUDA 12.3 + cuDNN 9, Python 3.12, and locked `uv` dependency stack. It contains no `.env`, frontend dependencies, or host GPU drivers.
+
+Docker Desktop with WSL2 and NVIDIA container support is required for the GPU path. The runtime receives its existing configuration only from `backend/.env` and exposes FastAPI on host port `8000`:
+
+```bash
+cd backend
+cp .env.example .env
+docker compose up --build
+```
+
+The compose file requests the host GPU and stores downloaded Whisper models in a Docker-managed volume. It does not start an LLM service. To use the existing Dev Container Ollama service from this separate backend container, set this in `backend/.env` before starting it:
+
+```env
+LLM_BASE_URL=http://host.docker.internal:11435/v1
+```
+
+`host.docker.internal` is provided by Docker Desktop. Other OpenAI-compatible providers should use their reachable base URL instead. Stop the runtime with `docker compose down`; the named model-cache volume is retained.
+
+The default host mapping is `8000:8000`. The active Dev Container also reserves host port `8000`; run the runtime alongside it with a different host port instead:
+
+```bash
+BACKEND_HOST_PORT=8001 docker compose up --build
+```
+
+When the Vite development server runs inside the Dev Container, configure its proxy to reach this separate runtime in `frontend/.env`, then restart Vite:
+
+```env
+VITE_BACKEND_URL=http://host.docker.internal:8000
+```
+
+The browser-facing WebSocket fallback remains `ws://<page-host>:8000/ws/transcribe`, so local browser development continues to use the published backend port. If using the parallel `8001` mapping, set `VITE_BACKEND_URL=http://host.docker.internal:8001` and `VITE_BACKEND_PORT=8001`; set `VITE_WS_URL` only when a different WebSocket base URL is needed.
 
 ### Frontend
 

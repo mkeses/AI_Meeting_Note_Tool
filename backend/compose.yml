@@ -1,0 +1,14 @@
+services:
+  backend:
+    build:
+      context: .
+    env_file:
+      - .env
+    ports:
+      - "${BACKEND_HOST_PORT:-8000}:8000"
+    gpus: all
+    volumes:
+      - backend_model_cache:/home/app/.cache/huggingface
+
+volumes:
+  backend_model_cache:
