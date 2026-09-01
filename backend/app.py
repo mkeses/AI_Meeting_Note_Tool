@@ -49,8 +49,6 @@ LIVE_CHUNK_BYTES = 16_000
 OVERLAP_SECONDS = 1.5
 OVERLAP_BYTES = int(OVERLAP_SECONDS * BYTES_PER_SECOND)
 
-WORD_START_TOLERANCE_SECONDS = 0.15
-
 MAX_PARTIAL_SECONDS = 12.0
 MAX_PARTIAL_BYTES = int(MAX_PARTIAL_SECONDS * BYTES_PER_SECOND)
 
@@ -420,8 +418,7 @@ async def transcribe_websocket(websocket: WebSocket):
             new_words = [
                 word
                 for word in words
-                if (float(word["start"]) + window_start_seconds)
-                >= committed_audio_seconds - WORD_START_TOLERANCE_SECONDS
+                if (float(word["end"]) + window_start_seconds) > committed_audio_seconds
             ]
 
             new_text = words_text(new_words)
@@ -556,6 +553,9 @@ async def transcribe_websocket(websocket: WebSocket):
                 try:
                     payload = json.loads(text_data)
                 except json.JSONDecodeError:
+                    continue
+
+                if not isinstance(payload, dict):
                     continue
 
                 message_type = payload.get("type")

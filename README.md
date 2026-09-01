@@ -1,92 +1,463 @@
 # AI Meeting Note Tool
 
-A local-first meeting transcription and note-taking app. Records audio, transcribes it live using Whisper, and generates structured meeting notes/summaries using a local LLM.
+A local-first AI meeting transcription and note-taking application built around real-time audio processing, editable live transcription, and structured AI-generated meeting notes.
+
+The project is designed as an engineering-focused application rather than a simple transcription demo. It combines browser audio capture, WebSocket streaming, rolling-window speech recognition, frontend state management, user-edit protection, local persistence, and automated testing.
+
+## Project Status
+
+**Current status:** Core transcription and note-taking functionality is implemented and covered by frontend Vitest and backend pytest suites. The application currently runs locally using a containerized development environment.
+
+The next development phase focuses on searchable meeting history and export workflows before moving toward desktop packaging and remote deployment.
+
+---
 
 ## Architecture
 
-```
-┌─────────────────┐        WebSocket / REST        ┌──────────────────────┐
-│   Frontend       │ ◄─────────────────────────────► │  Backend (FastAPI)   │
-│  React + TS +    │                                 │  - Live transcription│
-│  Vite            │                                 │    (Whisper, CUDA)   │
-│                  │                                 │  - Summarization     │
-│  - Audio capture │                                 │    (local LLM)       │
-│  - Live transcript view (committed vs partial)     │  - Meeting storage   │
-│  - Meeting list / edit / rename / save             └──────────────────────┘
-└─────────────────┘
-```
-
-**Key design points:**
-
-- Live transcription uses a **windowed, word-level commit architecture**: audio is processed in a bounded rolling window (not full re-transcription) to avoid quadratic slowdown on long recordings.
-- Commit boundaries only advance to the end of a fully recognized word, avoiding mid-word cuts.
-- Pause detection (via PCM energy) force-commits segments during silence, gated on actual detected speech to avoid Whisper hallucination.
-- The frontend separates **committed (editable)** transcript text from **partial (read-only)** live text, and protects user edits from being overwritten by incoming WebSocket updates using word-count diffing.
-
-## Project structure
-
-```
-backend/
-  app.py              # FastAPI app: WebSocket + REST endpoints
-  transcription.py     # Whisper-based windowed live transcription logic
-  system_prompt.txt    # LLM prompt for meeting note/summary generation
-  pyproject.toml       # Python deps, managed with uv
-  .env.example         # Required environment variables (copy to .env)
-
-frontend/
-  src/
-    App.tsx             # Main app shell
-    audio/              # Audio capture / recording logic
-    components/         # UI components (recording controls, transcript view, etc.)
-    styles/             # Shared styles
-    types/              # Shared TypeScript types
-```
-
-## Prerequisites
-
-- Python 3.10+ with [`uv`](https://github.com/astral-sh/uv) installed
-- Node.js 18+ and npm
-- NVIDIA GPU + CUDA (recommended for Whisper performance; CPU fallback possible but slower)
-- A local LLM runtime (e.g., Ollama or similar) for summarization — configure via `.env`
-
-## Manual setup
-
-### Backend
-
-```bash
-cd backend
-uv sync
+```text
+┌──────────────────────────────┐
+│        React Frontend        │
+│          TypeScript          │
+│            Vite              │
+│                              │
+│  ┌────────────────────────┐  │
+│  │ Browser Audio Capture  │  │
+│  └────────────┬───────────┘  │
+│               │ WebSocket    │
+│               ▼              │
+│  ┌────────────────────────┐  │
+│  │ Live Transcript Editor │  │
+│  │                        │  │
+│  │ Committed text         │  │
+│  │ Provisional text       │  │
+│  │ User-edit protection   │  │
+│  └────────────┬───────────┘  │
+│               │ REST         │
+│               ▼              │
+│  ┌────────────────────────┐  │
+│  │ Meeting Notes / History│  │
+│  └────────────────────────┘  │
+└──────────────┬───────────────┘
+               │
+        WebSocket / REST
+               │
+               ▼
+┌──────────────────────────────┐
+│       Python Backend         │
+│           FastAPI            │
+│                              │
+│  ┌────────────────────────┐  │
+│  │ Audio / PCM processing │  │
+│  └────────────┬───────────┘  │
+│               ▼              │
+│  ┌────────────────────────┐  │
+│  │ Windowed Whisper       │  │
+│  │ Transcription          │  │
+│  └────────────┬───────────┘  │
+│               ▼              │
+│  ┌────────────────────────┐  │
+│  │ Local LLM Cleanup      │  │
+│  │ / Structured Notes     │  │
+│  └────────────────────────┘  │
+└──────────────────────────────┘
 ```
 
-Create the backend environment file:
+### Technology Stack
 
-```bash
-cp .env.example .env
+| Layer                        | Technology                      |
+| ---------------------------- | ------------------------------- |
+| Frontend                     | React + TypeScript + Vite       |
+| Backend                      | Python + FastAPI                |
+| Live communication           | WebSocket                       |
+| Speech recognition           | Faster-Whisper                  |
+| AI note generation           | OpenAI-compatible local LLM API |
+| Local LLM runtime            | Ollama-compatible               |
+| Frontend testing             | Vitest + React Testing Library  |
+| Backend testing              | pytest                          |
+| Python dependency management | `uv`                            |
+| Development environment      | Docker / Dev Container          |
+| GPU acceleration             | NVIDIA CUDA                     |
+
+---
+
+## Engineering Highlights
+
+### 1. Windowed real-time transcription
+
+Live transcription does not repeatedly process the entire recording.
+
+Instead, the backend advances a word-level commit boundary and sends only audio after that boundary (with a small overlap) to live Whisper passes.
+
+This avoids repeatedly transcribing already committed leading speech during live updates.
+
+```text
+Incoming audio
+      │
+      ▼
+┌───────────────┐
+│ Rolling audio │
+│    window     │
+└───────┬───────┘
+        │
+        ▼
+     Whisper
+        │
+        ▼
+┌────────────────────┐
+│ Word-level commit  │
+│     boundary       │
+└─────────┬──────────┘
+          │
+          ▼
+Frontend committed text
 ```
 
-Configure the values in `backend/.env` for your transcription and LLM setup.
+Commit boundaries are advanced only to recognized word boundaries rather than arbitrary character positions, reducing the chance of producing partial or corrupted words.
 
-Start the API:
+### 2. Pause-aware transcription commits
 
-```bash
-uv run uvicorn app:app --reload --host 0.0.0.0 --port 8000 --timeout-keep-alive 600
+The backend monitors PCM audio energy to detect periods of silence.
+
+During a pause, recognized speech can be force-committed instead of waiting indefinitely for additional audio.
+
+The pause logic is gated on detected speech so that silence by itself does not cause Whisper to produce unnecessary hallucinated text.
+
+### 3. Editable live transcription
+
+The live transcript is intentionally divided into two regions:
+
+- **Committed text** — editable by the user.
+- **Provisional text** — temporary recognition output that can change as more audio arrives.
+
+When the user edits committed text, incoming transcription updates must not simply replace the user's changes.
+
+The frontend therefore maintains protected user-edited text and merges compatible backend updates using word/suffix-based comparison.
+
+This is one of the highest-risk state-management boundaries in the application and is covered by automated tests.
+
+### 4. Cursor and selection preservation
+
+Live transcription updates can cause React-controlled textareas to re-render while a user is actively editing.
+
+The application explicitly preserves the user's selection/cursor position when live committed text changes.
+
+This prevents a common failure mode where incoming transcription causes the caret to jump to the end of the text or destroys an active selection.
+
+### 5. Resource lifecycle management
+
+Audio capture involves several independently acquired resources:
+
+- Display capture stream
+- Microphone stream
+- `MediaRecorder`
+- `AudioContext`
+- Audio worklet
+- WebSocket
+- Recording timers
+
+The capture hook tracks these resources so that partial initialization failures also release resources correctly.
+
+For example, if microphone initialization fails after screen capture has already succeeded, the previously acquired screen stream is still cleaned up.
+
+Recorder failures also terminate the recording timer and send the existing WebSocket stop message exactly once.
+
+### 6. Local-first session storage
+
+Saved meetings are currently persisted in browser storage.
+
+The frontend handles:
+
+- Session creation
+- Session updates
+- Session deletion
+- Remount recovery
+- Malformed storage data
+- Incomplete/legacy session data
+
+Invalid persisted entries are normalized or discarded rather than being allowed to break the meeting history UI.
+
+### 7. Containerized development environment
+
+Development is performed inside a Linux Docker/Dev Container environment.
+
+Frontend dependencies are stored in a Docker-managed Linux volume rather than the Windows workspace:
+
+```text
+Windows workspace
+       │
+       ├── source code ───────────────► bind mount
+       │
+       └── frontend/node_modules ────► Linux Docker volume
 ```
 
-### Frontend
+This prevents platform-specific native packages such as Rollup binaries from being contaminated by installing Linux dependencies into a Windows-visible `node_modules` directory.
 
-In a second terminal:
+The environment uses:
 
-```bash
-cd frontend
-npm install
-npm run dev
+- Node.js
+- Python
+- `uv`
+- NVIDIA CUDA support
+- Docker-managed frontend dependencies
+
+---
+
+## Testing
+
+The frontend currently has **50 automated tests across 7 test files**. The backend has **10 deterministic pytest tests** for the live transcription handler.
+
+Testing focuses on the application's highest-risk state and resource boundaries rather than attempting to test every UI component independently.
+
+### Current coverage includes
+
+#### Live transcription
+
+- Committed transcript updates
+- Provisional transcript updates
+- User edits during live transcription
+- Backend commits after user edits
+- Equal/shrinking backend commits
+- Final transcript handling
+- Malformed WebSocket messages
+- Binary/unknown messages
+- Edited final transcript behavior
+
+#### Cursor preservation
+
+- Focused textarea editing
+- Selection preservation during live transcript updates
+- Selection clamping when text changes
+
+#### Audio capture
+
+- WebSocket startup/shutdown
+- WebSocket error and close handling
+- Recording lifecycle
+- Timer cleanup
+- Stream cleanup
+- AudioContext cleanup
+- Microphone permission failures
+- Missing microphone tracks
+- MediaRecorder construction/start failures
+- MediaRecorder error cleanup
+
+#### Session persistence
+
+- localStorage persistence
+- Session updates/deletion
+- Remount recovery
+- Malformed stored data
+- Incomplete/legacy sessions
+- Invalid session entries
+
+#### AI cleanup
+
+- Request payload construction
+- Meeting type
+- Custom system prompts
+- Empty input handling
+- Backend failure handling
+- Loading/processing state
+- Regeneration
+- Unmount safety
+
+#### Push-to-talk
+
+- Press/release behavior
+- Repeated key protection
+- Recording/processing guards
+- Input/textarea/contenteditable protection
+- Listener cleanup
+
+#### Backend live transcription
+
+- Word-boundary commit progression and overlapping-window deduplication
+- Provisional transcript changes and final-transcript fallback
+- PCM RMS speech/silence gating and pause-triggered commits
+- Malformed control messages, disconnect cancellation, and live-model failures
+
+### Validation
+
+The project uses automated checks for:
+
+```text
+TypeScript type checking
+        │
+        ▼
+ESLint
+        │
+        ▼
+Prettier formatting
+        │
+        ▼
+Vitest
+        │
+        ▼
+Production build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Python development checks include:
 
-## LLM configuration
+```text
+pytest
+        │
+        ▼
+ruff
+black
+```
 
-The cleanup pipeline uses an OpenAI-compatible API. Configure the provider in `backend/.env`:
+---
+
+## Project Structure
+
+```text
+.
+├── .devcontainer/
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   ├── devcontainer.json
+│   └── post-create.sh
+│
+├── backend/
+│   ├── app.py
+│   ├── transcription.py
+│   ├── system_prompt.txt
+│   ├── pyproject.toml
+│   └── .env.example
+│
+├── frontend/
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   ├── styles/
+│   │   └── types/
+│   ├── package.json
+│   └── vite.config.ts
+│
+└── README.md
+```
+
+### Important frontend modules
+
+```text
+src/
+├── App.tsx
+│   └── Application-level state and workflow
+│
+├── hooks/
+│   ├── useAudioCapture.ts
+│   │   └── Browser recording + WebSocket lifecycle
+│   │
+│   ├── useLiveTranscript.ts
+│   │   └── Committed/provisional transcript state
+│   │
+│   ├── useTranscriptCleanup.ts
+│   │   └── AI cleanup / note generation
+│   │
+│   ├── useMeetingSessions.ts
+│   │   └── Local meeting persistence
+│   │
+│   └── usePushToTalk.ts
+│       └── Keyboard recording control
+│
+└── components/
+    └── Presentation and UI components
+```
+
+---
+
+## Features
+
+### Live transcription
+
+- Real-time audio streaming
+- Whisper-based transcription
+- Rolling-window processing
+- Provisional transcription
+- Word-level commit boundaries
+- Pause-aware commits
+
+### Transcript editing
+
+- Fully editable committed transcript
+- User edits protected from incoming recognition updates
+- Cursor/selection preservation during live updates
+
+### AI meeting notes
+
+- Structured meeting summaries
+- Meeting-specific types/prompts
+- Configurable system prompt
+- Local LLM support through an OpenAI-compatible API
+- Raw transcription remains available if AI cleanup is disabled
+
+### Meeting management
+
+- Save meetings locally
+- Rename meetings
+- Edit saved transcripts
+- Restore sessions after reload
+- Delete meetings
+
+### Recording controls
+
+- Start/stop recording
+- Push-to-talk support
+- Microphone capture
+- Screen/audio capture
+- Recording timer
+- Error recovery and resource cleanup
+
+---
+
+## Backend API and WebSocket Contract
+
+### REST API
+
+| Method | Path | Request | Success response | Important failures |
+| ------ | ---- | ------- | ---------------- | ------------------ |
+| `GET` | `/api/status` | None | `status`, `whisper_model`, `llm_model`, `llm_base_url` | `status` is `initializing` until the service exists. |
+| `GET` | `/api/system-prompt` | None | `{ "default_prompt": string }` | `503` when the service is not ready. |
+| `POST` | `/api/transcribe` | `multipart/form-data` with required `audio` file | `{ "success": true, "text": string }` | `503` if unready; `500` if file transcription fails. |
+| `POST` | `/api/clean` | JSON: required `text`; optional `system_prompt`; optional `meeting_type` (defaults to `general`) | `{ "success": true, "text": string }` | FastAPI validation errors for invalid JSON; `503` if unready; `502` if LLM cleanup fails. |
+
+### Live transcription WebSocket
+
+Connect to `/ws/transcribe`. The server accepts the connection, then sends `ready` after a client `start` control message. The browser currently sends `sample_rate: 48000`, `channels: 1`, `include_microphone`, and `language` alongside `type: "start"`; the backend recognizes `type` and does not validate those extra fields.
+
+Client messages:
+
+- JSON `{ "type": "start" }` starts or resets one live session.
+- Binary frames are 48 kHz, mono, signed 16-bit PCM audio chunks.
+- JSON `{ "type": "stop" }` ends live capture and starts one final transcription pass.
+
+Server messages:
+
+- `ready` includes a human-readable `message`.
+- `transcript` includes `committed_text`, provisional `partial_text`, and timed `segments`. Committed text advances only at recognized word ends; partial text may shrink or be replaced.
+- `final` includes the final full-recording `text`, plus matching `committed_text` and an empty `partial_text`, then closes with code `1000`.
+
+Malformed JSON, JSON values that are not objects, unknown control messages, and binary data before `start` are ignored. A client disconnect cancels any active live task. A live-window transcription failure is logged and the final full-recording pass is still attempted. If the final pass returns empty text, the handler currently sends no `final` message.
+
+## Backend Configuration
+
+Backend startup requires all four values below, even when the frontend disables LLM cleanup:
+
+| Variable | Purpose |
+| -------- | ------- |
+| `WHISPER_MODEL` | Faster-Whisper model name, for example `base.en`. |
+| `LLM_BASE_URL` | OpenAI-compatible LLM API base URL. |
+| `LLM_API_KEY` | API key passed to that client. Ollama ignores the example value. |
+| `LLM_MODEL` | LLM model name used for cleanup. |
+
+Copy `backend/.env.example` to `backend/.env` for the local development defaults. The backend tries the LLM connection at startup but logs a warning rather than failing if that check cannot connect.
+
+## Local LLM Configuration
+
+The cleanup pipeline communicates with an OpenAI-compatible API.
+
+For example, using Ollama:
 
 ```env
 LLM_BASE_URL=http://localhost:11434/v1
@@ -94,41 +465,196 @@ LLM_API_KEY=ollama
 LLM_MODEL=your-model-name
 ```
 
-Common provider options include:
+Other OpenAI-compatible providers can also be used.
 
-- Ollama for local inference.
-- LM Studio for local inference.
-- OpenAI or another hosted OpenAI-compatible provider.
+If LLM cleanup is disabled or unavailable, the application can still provide the raw Whisper transcription.
 
-If LLM cleanup is disabled or unavailable, the app can still return the raw Whisper transcription.
+---
 
-## Running a meeting
+## Development
 
-1. Start the backend and frontend as above.
-2. Open the frontend in your browser (default Vite port).
-3. Start a recording — audio streams to the backend over WebSocket for live transcription.
-4. Edit the committed transcript text at any time; your edits are preserved as new speech is recognized.
-5. Save, rename, or export the meeting once finished.
+The recommended development environment is the project's Docker Dev Container.
 
-## Known limitations / in-progress areas
+### Backend
 
-- `App.tsx` is currently a large single component; a component-level refactor is planned to improve maintainability.
-- No automated test suite yet for the transcription window/commit logic or the frontend edit-protection diffing — planned as part of the stabilization phase.
-- Backend currently runs locally only; no remote deployment or containerization yet.
-- No packaged desktop (Windows) or mobile (iOS) build yet — planned next.
+```bash
+cd backend
+uv sync --extra dev
+```
+
+Configure the environment:
+
+```bash
+cp .env.example .env
+```
+
+Start FastAPI:
+
+```bash
+uv run uvicorn app:app --reload --host 0.0.0.0 --port 8000 --timeout-keep-alive 600
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+The frontend is normally available at:
+
+```text
+http://localhost:3000
+```
+
+---
+
+## Validation Commands
+
+### Frontend
+
+```bash
+cd frontend
+
+npm run type-check
+npm run lint
+npm run format:check
+npm run test:run
+npm run build
+```
+
+### Backend
+
+```bash
+cd backend
+
+uv run ruff check .
+uv run black --check .
+uv run pytest
+```
+
+---
+
+## Engineering Priorities
+
+The project is being developed incrementally, with reliability and architectural stability prioritized before adding larger product features.
+
+The current priority order is:
+
+```text
+Testing / stabilization
+        │
+        ▼
+Searchable meeting history
+        │
+        ▼
+Export workflows
+        │
+        ▼
+Windows desktop packaging
+        │
+        ▼
+Remote backend + PWA
+        │
+        ▼
+Speaker diarization
+        │
+        ▼
+iOS packaging
+```
+
+The goal is to establish reliable application behavior and a maintainable architecture before introducing additional deployment targets.
+
+---
 
 ## Roadmap
 
-- [ ] Add backend API/WebSocket contract docs
-- [ ] Add pytest tests for transcription window/commit + pause detection
-- [ ] Add Vitest tests for frontend edit-protection diffing
-- [ ] Dockerize backend
-- [ ] Package as Windows desktop app (Electron)
-- [ ] Deploy backend remotely + convert frontend to PWA
-- [ ] Package as iOS app (Capacitor)
+### Phase 1 — Stabilization
+
+- [x] Frontend automated test suite
+- [x] Live transcription/edit-protection tests
+- [x] Cursor preservation tests
+- [x] Audio lifecycle/error tests
+- [x] Meeting persistence tests
+- [x] AI cleanup tests
+- [x] Push-to-talk tests
+- [x] Containerized development environment
+- [x] Backend transcription, pause-detection, and WebSocket lifecycle tests
+
+### Phase 2 — Meeting productivity
+
+- [ ] Searchable meeting history
+- [ ] Meeting metadata and filtering
+- [ ] Export to Markdown
+- [ ] Export to PDF
+- [ ] Improved meeting organization
+
+### Phase 3 — Desktop application
+
+- [ ] Package frontend as a Windows application with Electron
+- [ ] Integrate local backend/runtime
+- [ ] Desktop-specific recording and lifecycle handling
+
+### Phase 4 — Remote deployment
+
+- [ ] Deploy backend remotely
+- [ ] Convert frontend into a PWA
+- [ ] Production WebSocket/API configuration
+- [ ] Authentication and secure transport
+- [ ] Production monitoring/error handling
+
+### Phase 5 — Advanced transcription
+
 - [ ] Speaker diarization
-- [ ] Export to PDF/Markdown, meeting search/history
+- [ ] Speaker-aware transcripts
+- [ ] Improved transcript segmentation
 
-## Contributing / development notes
+### Phase 6 — Mobile
 
-This is an actively evolving personal project. See commit history for recent fixes to live transcription pause handling and edit protection, which informed the current architecture described above.
+- [ ] Package application for iOS with Capacitor
+- [ ] Adapt audio capture to mobile constraints
+- [ ] Mobile-specific backend/network behavior
+
+---
+
+## Engineering Lessons / Design Goals
+
+This project is intentionally being developed around real engineering constraints rather than only feature development.
+
+Important design goals include:
+
+- **Bounded processing:** avoid algorithms whose cost grows excessively with meeting length.
+- **Explicit state boundaries:** separate provisional recognition state from user-owned editable state.
+- **Failure-safe resource ownership:** clean up partially initialized audio resources.
+- **Deterministic persistence:** recover gracefully from malformed or incomplete local data.
+- **Test high-risk behavior:** prioritize state transitions, asynchronous boundaries, and resource lifecycles.
+- **Reproducible development:** use a containerized environment with isolated platform-specific dependencies.
+- **Incremental architecture:** stabilize core behavior before adding deployment targets and advanced features.
+
+These constraints are particularly important in a real-time application because failures often occur at the boundaries between asynchronous systems rather than in the individual components themselves.
+
+---
+
+## Why I Built This
+
+This project explores the engineering challenges involved in building a real-time application that combines:
+
+- Browser audio capture
+- Streaming communication
+- Speech recognition
+- Asynchronous state updates
+- Editable real-time data
+- Local AI inference
+- Persistent application state
+- Resource lifecycle management
+- Automated testing
+- Containerized development
+
+The primary objective is to build a practical application while demonstrating the ability to reason about **system boundaries, failure modes, performance, and maintainability**.
+
+---
+
+## License
+
+This project is currently a personal portfolio project.

@@ -21,6 +21,7 @@ dependencies = [
 dev = [
     "ruff>=0.8.0",
     "black>=24.0.0",
+    "pytest>=8.0.0",
 ]
 
 
@@ -68,3 +69,8 @@ ignore = [
     "E114",
     "E117",
 ]
+
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
