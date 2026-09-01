@@ -24,6 +24,7 @@ import type {
   SavedSession,
 } from './hooks/useMeetingSessions';
 import { usePushToTalk } from './hooks/usePushToTalk';
+import { downloadMeetingReportPdf } from './lib/meetingReportPdf';
 
 interface TranscriptionResponse {
   success: boolean;
@@ -110,6 +111,7 @@ function App() {
   const [includeMicrophone, setIncludeMicrophone] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [meetingType, setMeetingType] = useState<MeetingType>('general');
   const [isPromptOpen, setIsPromptOpen] = useState(false);
@@ -778,6 +780,37 @@ function App() {
       });
   }, []);
 
+  const exportMeetingPdf = useCallback(async () => {
+    if (!activeSavedSession) {
+      return;
+    }
+
+    setIsExportingPdf(true);
+
+    try {
+      await downloadMeetingReportPdf({
+        title: sessionFilename?.trim() || activeSavedSession.filename,
+        savedAt: sessionCreatedAt ?? activeSavedSession.createdAt,
+        meetingType,
+        sourceType: sessionInputType ?? activeSavedSession.sourceType,
+        summary: cleanedText ?? activeSavedSession.cleanedText,
+      });
+    } catch (exportError) {
+      const message =
+        exportError instanceof Error ? exportError.message : 'Unknown error';
+      setError(`PDF export failed: ${message}`);
+    } finally {
+      setIsExportingPdf(false);
+    }
+  }, [
+    activeSavedSession,
+    cleanedText,
+    meetingType,
+    sessionCreatedAt,
+    sessionFilename,
+    sessionInputType,
+  ]);
+
   const selectedMeeting =
     MEETING_OPTIONS.find((option) => option.value === meetingType) ??
     MEETING_OPTIONS.find((option) => option.value === 'general')!;
@@ -1330,11 +1363,14 @@ function App() {
                 editedRawText={editedRawText}
                 onRawTextChange={setEditedRawText}
                 onRegenerateCleanup={() => regenerateCleanup(editedRawText)}
+                onExportPdf={exportMeetingPdf}
                 cleanedText={cleanedText}
                 useLLM={useLLM}
                 isCopied={isCopied}
                 isCleaningWithLLM={isCleaningWithLLM}
                 isProcessing={isProcessing}
+                canExportPdf={Boolean(activeSavedSession)}
+                isExportingPdf={isExportingPdf}
                 onCopy={copyToClipboard}
               />
             </section>

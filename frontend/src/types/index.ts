@@ -61,6 +61,7 @@ export interface SettingsPanelProps {
 
 export interface TranscriptionResultsProps {
   onRegenerateCleanup: () => void | Promise<void>;
+  onExportPdf?: () => void | Promise<void>;
   rawText: string | null;
   editedRawText: string;
   onRawTextChange: (text: string) => void;
@@ -69,6 +70,8 @@ export interface TranscriptionResultsProps {
   isCopied: boolean;
   isCleaningWithLLM: boolean;
   isProcessing: boolean;
+  canExportPdf?: boolean;
+  isExportingPdf?: boolean;
   onCopy: (text: string) => void;
 }
 

@@ -163,11 +163,14 @@ export function TranscriptionResults({
   editedRawText,
   onRawTextChange,
   onRegenerateCleanup,
+  onExportPdf,
   cleanedText,
   useLLM,
   isCopied,
   isCleaningWithLLM,
   isProcessing,
+  canExportPdf = false,
+  isExportingPdf = false,
   onCopy,
 }: TranscriptionResultsProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('summary');
@@ -277,6 +280,20 @@ export function TranscriptionResults({
                     <span>Download .md</span>
                   </button>
                 </>
+              )}
+
+              {onExportPdf && canExportPdf && (
+                <button
+                  type="button"
+                  className={styles.copyButton}
+                  onClick={() => void onExportPdf()}
+                  disabled={isExportingPdf}
+                >
+                  <Download size={16} />
+                  <span>
+                    {isExportingPdf ? 'Exporting PDF...' : 'Export PDF'}
+                  </span>
+                </button>
               )}
             </div>
           </div>

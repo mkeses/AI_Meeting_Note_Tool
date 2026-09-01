@@ -21,6 +21,10 @@ const cleanupState = vi.hoisted(() => ({
   regenerateCleanup: vi.fn(() => Promise.resolve()),
 }));
 
+const meetingReportState = vi.hoisted(() => ({
+  downloadMeetingReportPdf: vi.fn(() => Promise.resolve()),
+}));
+
 const fetchMock = vi.hoisted(() => vi.fn<typeof fetch>());
 
 vi.mock('./hooks/useAudioCapture', async () => {
@@ -72,6 +76,10 @@ vi.mock('./hooks/useTranscriptCleanup', () => ({
     cleanTranscription: cleanupState.cleanTranscription,
     regenerateCleanup: cleanupState.regenerateCleanup,
   }),
+}));
+
+vi.mock('./lib/meetingReportPdf', () => ({
+  downloadMeetingReportPdf: meetingReportState.downloadMeetingReportPdf,
 }));
 
 import App from './App';
@@ -159,6 +167,7 @@ describe('App live transcript editor', () => {
     audioCaptureState.onSocketMessage = undefined;
     cleanupState.cleanTranscription.mockClear();
     cleanupState.regenerateCleanup.mockClear();
+    meetingReportState.downloadMeetingReportPdf.mockClear();
     fetchMock.mockReset();
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify([]), {
@@ -275,6 +284,32 @@ describe('App live transcript editor', () => {
     expect(
       screen.queryByRole('button', { name: 'Saved notes' })
     ).not.toBeInTheDocument();
+  });
+
+  it('exports a PDF using the active saved meeting data', async () => {
+    const user = userEvent.setup();
+    const session = createSession({
+      cleanedText: '## Meeting Overview\nThe team agreed on the plan.',
+      sourceType: 'text',
+    });
+    fetchMock.mockResolvedValueOnce(jsonResponse([session]));
+
+    render(<App />);
+
+    await user.click(
+      await screen.findByRole('button', { name: /^architecture review/i })
+    );
+    await user.click(screen.getByRole('button', { name: 'Export PDF' }));
+
+    await waitFor(() => {
+      expect(meetingReportState.downloadMeetingReportPdf).toHaveBeenCalledWith({
+        title: session.filename,
+        savedAt: session.createdAt,
+        meetingType: session.meetingType,
+        sourceType: session.sourceType,
+        summary: session.cleanedText,
+      });
+    });
   });
 
   it('persists a changed meeting title through the filename field', async () => {
