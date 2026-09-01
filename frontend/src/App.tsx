@@ -18,7 +18,10 @@ import { useTranscriptCleanup } from './hooks/useTranscriptCleanup';
 import { useMeetingSessions } from './hooks/useMeetingSessions';
 import { useAudioCapture } from './hooks/useAudioCapture';
 import { useLiveTranscript } from './hooks/useLiveTranscript.ts';
-import type { SavedSession } from './hooks/useMeetingSessions';
+import type {
+  MeetingSourceType,
+  NewSavedSession,
+} from './hooks/useMeetingSessions';
 import { usePushToTalk } from './hooks/usePushToTalk';
 
 interface TranscriptionResponse {
@@ -28,7 +31,7 @@ interface TranscriptionResponse {
 }
 
 type MeetingType = 'general' | 'design_review' | 'debug_sync' | 'standup';
-type SessionInputType = 'recording' | 'audio-file' | 'text' | null;
+type SessionInputType = MeetingSourceType | null;
 
 interface MeetingOption {
   value: MeetingType;
@@ -142,11 +145,19 @@ function App() {
 
   const {
     savedSessions,
+    isLoading: areSessionsLoading,
+    error: sessionError,
     openSavedSession,
     saveSession,
     addSession,
     deleteSession,
   } = sessions;
+
+  useEffect(() => {
+    if (sessionError) {
+      setError(sessionError);
+    }
+  }, [sessionError]);
 
   const processFinalTranscript = useCallback(
     async (transcript: string, filename: string) => {
@@ -163,7 +174,9 @@ function App() {
 
       const cleaned = await cleanTranscription(finalText);
 
-      const newSession: SavedSession = {
+      const sourceType: Exclude<SessionInputType, null> =
+        filename === 'recording.webm' ? 'recording' : 'audio-file';
+      const newSession: NewSavedSession = {
         id: crypto.randomUUID(),
         sourceKey:
           filename === 'recording.webm'
@@ -175,15 +188,19 @@ function App() {
         meetingType,
         rawText: finalText,
         cleanedText: cleaned,
+        sourceType,
+        notes: '',
       };
 
-      const { activeSessionId: newActiveId } = addSession(newSession);
-      setActiveSessionId(newActiveId);
+      const savedSession = await addSession(newSession);
+      if (savedSession) {
+        setActiveSessionId(savedSession.activeSessionId);
+      } else {
+        setActiveSessionId(null);
+      }
 
       setSessionFilename(filename);
-      setSessionInputType(
-        filename === 'recording.webm' ? 'recording' : 'audio-file'
-      );
+      setSessionInputType(sourceType);
 
       setCleanedText(cleaned);
     },
@@ -276,8 +293,8 @@ function App() {
     return () => window.clearInterval(intervalId);
   }, [audioIsRecording]);
 
-  const saveChanges = useCallback(() => {
-    const savedId = saveSession(
+  const saveChanges = useCallback(async () => {
+    const savedId = await saveSession(
       activeSessionId,
       sessionFilename,
       editedRawText,
@@ -301,8 +318,13 @@ function App() {
   ]);
 
   const deleteSavedSession = useCallback(
-    (sessionId: string) => {
-      const { wasActive } = deleteSession(sessionId);
+    async (sessionId: string) => {
+      const deletedSession = await deleteSession(sessionId);
+      if (!deletedSession) {
+        return;
+      }
+
+      const { wasActive } = deletedSession;
 
       if (wasActive || activeSessionId === sessionId) {
         setActiveSessionId(null);
@@ -576,7 +598,11 @@ function App() {
                 Recent sessions
               </button>
               <div className={styles.recentSessionsList}>
-                {savedSessions.length === 0 ? (
+                {areSessionsLoading ? (
+                  <div className={styles.emptyRecentSessions}>
+                    Loading saved sessions...
+                  </div>
+                ) : savedSessions.length === 0 ? (
                   <div className={styles.emptyRecentSessions}>
                     No saved sessions yet.
                   </div>
@@ -621,7 +647,9 @@ function App() {
                           setIsCleaningWithLLM(false);
                           setRecordingSeconds(0);
                         }}
-                        disabled={audioIsRecording || isProcessing}
+                        disabled={
+                          audioIsRecording || isProcessing || areSessionsLoading
+                        }
                       >
                         <div className={styles.recentSessionFilename}>
                           {session.filename}
@@ -633,8 +661,10 @@ function App() {
                       <button
                         className={styles.deleteSessionButton}
                         type="button"
-                        onClick={() => deleteSavedSession(session.id)}
-                        disabled={audioIsRecording || isProcessing}
+                        onClick={() => void deleteSavedSession(session.id)}
+                        disabled={
+                          audioIsRecording || isProcessing || areSessionsLoading
+                        }
                         aria-label={`Delete ${session.filename}`}
                       >
                         ×
@@ -988,7 +1018,7 @@ function App() {
                   <button
                     type="button"
                     className={styles.saveChangesButton}
-                    onClick={saveChanges}
+                    onClick={() => void saveChanges()}
                     disabled={
                       !activeSessionId || audioIsRecording || isProcessing
                     }

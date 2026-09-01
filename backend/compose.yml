@@ -7,8 +7,12 @@ services:
     ports:
       - "${BACKEND_HOST_PORT:-8000}:8000"
     gpus: all
+    environment:
+      DATABASE_PATH: /data/meetings.db
     volumes:
       - backend_model_cache:/home/app/.cache/huggingface
+      - backend_meeting_data:/data
 
 volumes:
   backend_model_cache:
+  backend_meeting_data:

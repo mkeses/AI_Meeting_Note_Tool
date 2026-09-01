@@ -14,6 +14,8 @@ const cleanupState = vi.hoisted(() => ({
   regenerateCleanup: vi.fn(() => Promise.resolve()),
 }));
 
+const fetchMock = vi.hoisted(() => vi.fn<typeof fetch>());
+
 vi.mock('./hooks/useAudioCapture', async () => {
   const React = await import('react');
 
@@ -82,11 +84,19 @@ describe('App live transcript editor', () => {
     audioCaptureState.onSocketMessage = undefined;
     cleanupState.cleanTranscription.mockClear();
     cleanupState.regenerateCleanup.mockClear();
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
     localStorage.clear();
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('preserves the focused committed-text selection when live text is appended', async () => {

@@ -1,174 +1,184 @@
-import { renderHook, act } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type SavedSession, useMeetingSessions } from './useMeetingSessions';
+import {
+  type NewSavedSession,
+  type SavedSession,
+  useMeetingSessions,
+} from './useMeetingSessions';
 
-const storageKey = 'meeting-sessions';
+const fetchMock = vi.fn<typeof fetch>();
+
+function jsonResponse(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
 
 function createSession(overrides: Partial<SavedSession> = {}): SavedSession {
   return {
     id: 'session-1',
     sourceKey: 'source-1',
     filename: 'Meeting notes',
-    createdAt: '2026-08-31T12:00:00.000Z',
+    createdAt: '2026-09-01T12:00:00.000Z',
+    updatedAt: '2026-09-01T12:00:00.000Z',
     meetingType: 'general',
     rawText: 'Raw transcript',
     cleanedText: 'Cleaned transcript',
+    sourceType: 'recording',
+    notes: 'Follow up on the design decision.',
     ...overrides,
   };
+}
+
+function createNewSession(
+  overrides: Partial<NewSavedSession> = {}
+): NewSavedSession {
+  return {
+    id: 'session-1',
+    sourceKey: 'source-1',
+    filename: 'Meeting notes',
+    createdAt: '2026-09-01T12:00:00.000Z',
+    meetingType: 'general',
+    rawText: 'Raw transcript',
+    cleanedText: 'Cleaned transcript',
+    sourceType: 'recording',
+    notes: 'Follow up on the design decision.',
+    ...overrides,
+  };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+
+  return { promise, resolve };
 }
 
 describe('useMeetingSessions', () => {
   beforeEach(() => {
     localStorage.clear();
-    vi.clearAllMocks();
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it('starts with empty sessions when localStorage is empty', () => {
+  it('loads server meetings without changing existing localStorage data', async () => {
+    const legacySessions = JSON.stringify([{ id: 'legacy-session' }]);
+    localStorage.setItem('meeting-sessions', legacySessions);
+    const serverSession = createSession();
+    fetchMock.mockResolvedValueOnce(jsonResponse([serverSession]));
+
     const { result } = renderHook(() => useMeetingSessions());
+
+    expect(result.current.isLoading).toBe(true);
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/meetings', undefined);
+    expect(result.current.savedSessions).toEqual([serverSession]);
+    expect(localStorage.getItem('meeting-sessions')).toBe(legacySessions);
+  });
+
+  it('exposes an error and recovery state when the initial request fails', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('Network unavailable'));
+
+    const { result } = renderHook(() => useMeetingSessions());
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(result.current.savedSessions).toEqual([]);
+    expect(result.current.error).toBe(
+      'Failed to load saved meetings: Network unavailable'
+    );
   });
 
-  it('loads sessions from localStorage', () => {
-    const mockSession = {
-      id: 'test-1',
-      sourceKey: 'test-key',
-      filename: 'Test meeting',
-      createdAt: new Date().toISOString(),
-      meetingType: 'general' as const,
-      rawText: 'Raw transcript',
-      cleanedText: 'Cleaned transcript',
-    };
-
-    localStorage.setItem('meeting-sessions', JSON.stringify([mockSession]));
+  it('creates a meeting from the server response with the client ID, sourceKey, and sourceType', async () => {
+    const newSession = createNewSession({
+      id: 'client-created-id',
+      sourceKey: 'recording:client-source',
+      sourceType: 'recording',
+      notes: 'Persist this note.',
+    });
+    const createdSession = createSession({
+      ...newSession,
+      updatedAt: '2026-09-01T12:01:00.000Z',
+    });
+    fetchMock.mockResolvedValueOnce(jsonResponse([]));
+    fetchMock.mockResolvedValueOnce(jsonResponse(createdSession, 201));
 
     const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    expect(result.current.savedSessions).toHaveLength(1);
-    expect(result.current.savedSessions[0]?.filename).toBe('Test meeting');
-  });
-
-  it('adds a new session', () => {
-    const { result } = renderHook(() => useMeetingSessions());
-
-    const newSession = {
-      id: 'new-1',
-      sourceKey: 'new-key',
-      filename: 'New meeting',
-      createdAt: new Date().toISOString(),
-      meetingType: 'standup' as const,
-      rawText: 'New raw',
-      cleanedText: 'New cleaned',
-    };
-
-    act(() => {
-      result.current.addSession(newSession);
+    let addResult: Awaited<ReturnType<typeof result.current.addSession>> = null;
+    await act(async () => {
+      addResult = await result.current.addSession(newSession);
     });
 
-    expect(result.current.savedSessions).toHaveLength(1);
-    expect(result.current.savedSessions[0]?.filename).toBe('New meeting');
+    expect(addResult).toEqual({
+      activeSessionId: 'client-created-id',
+      sessionExists: false,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/meetings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newSession),
+    });
+    expect(result.current.savedSessions).toEqual([createdSession]);
   });
 
-  it('persists a newly added session with the hook session shape', () => {
-    const { result } = renderHook(() => useMeetingSessions());
-    const newSession = createSession({
-      id: 'added-1',
-      sourceKey: 'added-source',
-      meetingType: 'standup',
-    });
-
-    act(() => {
-      result.current.addSession(newSession);
-    });
-
-    const storedSessions = JSON.parse(
-      localStorage.getItem(storageKey) || '[]'
-    ) as SavedSession[];
-
-    expect(storedSessions).toEqual([newSession]);
-    expect(storedSessions).toEqual(result.current.savedSessions);
-  });
-
-  it('updates an existing session by sourceKey', () => {
-    const existingSession = {
-      id: 'existing-1',
-      sourceKey: 'existing-key',
-      filename: 'Old name',
-      createdAt: new Date().toISOString(),
-      meetingType: 'general' as const,
-      rawText: 'Old raw',
-      cleanedText: 'Old cleaned',
-    };
-
-    localStorage.setItem('meeting-sessions', JSON.stringify([existingSession]));
+  it('does not add a meeting when the POST request fails', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse([]));
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ detail: 'Unavailable' }, 503)
+    );
 
     const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    expect(result.current.savedSessions[0]?.filename).toBe('Old name');
-
-    const updatedSession = {
-      ...existingSession,
-      filename: 'Updated name',
-      rawText: 'Updated raw',
-    };
-
-    act(() => {
-      result.current.addSession(updatedSession);
+    await act(async () => {
+      await result.current.addSession(createNewSession());
     });
 
-    expect(result.current.savedSessions).toHaveLength(1);
-    expect(result.current.savedSessions[0]?.filename).toBe('Updated name');
+    expect(result.current.savedSessions).toEqual([]);
+    expect(result.current.error).toBe(
+      'Failed to save meeting: Request failed with status 503'
+    );
   });
 
-  it('deletes a session', () => {
-    const sessionToDelete = {
-      id: 'delete-1',
-      sourceKey: 'delete-key',
-      filename: 'To delete',
-      createdAt: new Date().toISOString(),
-      meetingType: 'general' as const,
-      rawText: 'Raw',
-      cleanedText: 'Cleaned',
-    };
-
-    localStorage.setItem('meeting-sessions', JSON.stringify([sessionToDelete]));
-
-    const { result } = renderHook(() => useMeetingSessions());
-
-    expect(result.current.savedSessions).toHaveLength(1);
-
-    act(() => {
-      result.current.deleteSession('delete-1');
-    });
-
-    expect(result.current.savedSessions).toHaveLength(0);
-  });
-
-  it('persists updates without changing unrelated sessions', () => {
-    const sessionToUpdate = createSession({
-      id: 'update-1',
-      sourceKey: 'update-source',
-      filename: 'Original meeting',
-    });
+  it('patches the selected meeting and leaves unrelated sessions unchanged', async () => {
+    const sessionToUpdate = createSession({ id: 'update-1' });
     const unrelatedSession = createSession({
       id: 'keep-1',
       sourceKey: 'keep-source',
       filename: 'Keep this meeting',
     });
-
-    localStorage.setItem(
-      storageKey,
-      JSON.stringify([sessionToUpdate, unrelatedSession])
+    const updatedSession = createSession({
+      ...sessionToUpdate,
+      filename: 'Updated meeting',
+      rawText: 'Edited raw transcript',
+      cleanedText: '',
+      meetingType: 'design_review',
+      updatedAt: '2026-09-01T12:05:00.000Z',
+    });
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse([sessionToUpdate, unrelatedSession])
     );
+    fetchMock.mockResolvedValueOnce(jsonResponse(updatedSession));
 
     const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    act(() => {
-      result.current.saveSession(
+    let savedId: Awaited<ReturnType<typeof result.current.saveSession>> = null;
+    await act(async () => {
+      savedId = await result.current.saveSession(
         sessionToUpdate.id,
         ' Updated meeting ',
         'Edited raw transcript',
@@ -177,143 +187,145 @@ describe('useMeetingSessions', () => {
       );
     });
 
-    const storedSessions = JSON.parse(
-      localStorage.getItem(storageKey) || '[]'
-    ) as SavedSession[];
-
-    expect(storedSessions).toEqual([
-      {
-        ...sessionToUpdate,
+    expect(savedId).toBe(sessionToUpdate.id);
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/meetings/update-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
         filename: 'Updated meeting',
         rawText: 'Edited raw transcript',
         cleanedText: '',
         meetingType: 'design_review',
-      },
+      }),
+    });
+    expect(result.current.savedSessions).toEqual([
+      updatedSession,
       unrelatedSession,
     ]);
   });
 
-  it('persists a deletion while preserving other sessions', () => {
-    const sessionToDelete = createSession({
-      id: 'delete-1',
-      sourceKey: 'delete-source',
+  it('preserves the previous meeting state when PATCH fails', async () => {
+    const session = createSession({ id: 'update-1' });
+    fetchMock.mockResolvedValueOnce(jsonResponse([session]));
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ detail: 'Unavailable' }, 503)
+    );
+
+    const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.saveSession(
+        session.id,
+        'Changed title',
+        'Changed text',
+        'Changed cleanup',
+        'standup'
+      );
     });
+
+    expect(result.current.savedSessions).toEqual([session]);
+    expect(result.current.error).toBe(
+      'Failed to save meeting: Request failed with status 503'
+    );
+  });
+
+  it('updates an existing sourceKey through PATCH instead of creating a duplicate', async () => {
+    const existingSession = createSession({ id: 'existing-id' });
+    const replacement = createSession({
+      ...existingSession,
+      filename: 'Replacement transcript',
+      rawText: 'Replacement raw text',
+      updatedAt: '2026-09-01T12:10:00.000Z',
+    });
+    fetchMock.mockResolvedValueOnce(jsonResponse([existingSession]));
+    fetchMock.mockResolvedValueOnce(jsonResponse(replacement));
+
+    const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.addSession(
+        createNewSession({
+          id: 'new-client-id',
+          sourceKey: existingSession.sourceKey,
+          filename: 'Replacement transcript',
+          rawText: 'Replacement raw text',
+        })
+      );
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/meetings/existing-id',
+      expect.objectContaining({ method: 'PATCH' })
+    );
+    expect(result.current.savedSessions).toEqual([replacement]);
+  });
+
+  it('removes a meeting only after DELETE succeeds', async () => {
+    const deletedSession = createSession({ id: 'delete-1' });
     const remainingSession = createSession({
       id: 'keep-1',
       sourceKey: 'keep-source',
     });
-
-    localStorage.setItem(
-      storageKey,
-      JSON.stringify([sessionToDelete, remainingSession])
+    const pendingDelete = createDeferred<Response>();
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse([deletedSession, remainingSession])
     );
+    fetchMock.mockReturnValueOnce(pendingDelete.promise);
 
     const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
 
+    let deletePromise: ReturnType<typeof result.current.deleteSession>;
     act(() => {
-      result.current.deleteSession(sessionToDelete.id);
+      deletePromise = result.current.deleteSession(deletedSession.id);
     });
 
-    expect(JSON.parse(localStorage.getItem(storageKey) || '[]')).toEqual([
+    expect(result.current.savedSessions).toEqual([
+      deletedSession,
       remainingSession,
     ]);
+
+    await act(async () => {
+      pendingDelete.resolve(new Response(null, { status: 204 }));
+      await deletePromise;
+    });
+
+    expect(result.current.savedSessions).toEqual([remainingSession]);
   });
 
-  it('restores sessions after a fresh mount', () => {
-    const sessions = [
-      createSession({ id: 'remount-1', sourceKey: 'remount-source-1' }),
-      createSession({ id: 'remount-2', sourceKey: 'remount-source-2' }),
-    ];
-    localStorage.setItem(storageKey, JSON.stringify(sessions));
-
-    const firstMount = renderHook(() => useMeetingSessions());
-
-    expect(firstMount.result.current.savedSessions).toEqual(sessions);
-
-    firstMount.unmount();
-
-    const secondMount = renderHook(() => useMeetingSessions());
-
-    expect(secondMount.result.current.savedSessions).toEqual(sessions);
-  });
-
-  it('recovers safely from malformed stored JSON', () => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    localStorage.setItem(storageKey, '{invalid JSON');
-
-    expect(() => {
-      const { result } = renderHook(() => useMeetingSessions());
-
-      expect(result.current.savedSessions).toEqual([]);
-    }).not.toThrow();
-  });
-
-  it('normalizes incomplete stored sessions using the existing defaults', () => {
-    localStorage.setItem(storageKey, JSON.stringify([{ id: 'incomplete-1' }]));
+  it('preserves a meeting when DELETE fails', async () => {
+    const session = createSession({ id: 'delete-1' });
+    fetchMock.mockResolvedValueOnce(jsonResponse([session]));
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ detail: 'Unavailable' }, 503)
+    );
 
     const { result } = renderHook(() => useMeetingSessions());
-    const restoredSession = result.current.savedSessions[0];
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    expect(restoredSession).toMatchObject({
-      id: 'incomplete-1',
-      sourceKey: 'incomplete-1',
-      filename: 'Untitled session',
-      meetingType: 'general',
-      rawText: '',
-      cleanedText: '',
+    await act(async () => {
+      await result.current.deleteSession(session.id);
     });
-    expect(restoredSession?.createdAt).toEqual(expect.any(String));
-    expect(JSON.parse(localStorage.getItem(storageKey) || '[]')).toEqual(
-      result.current.savedSessions
+
+    expect(result.current.savedSessions).toEqual([session]);
+    expect(result.current.error).toBe(
+      'Failed to delete meeting: Request failed with status 503'
     );
   });
 
-  it('falls back to an empty session list when a stored entry is invalid', () => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const validSession = createSession();
-    localStorage.setItem(storageKey, JSON.stringify([validSession, null]));
+  it('opens a loaded session without an additional API request', async () => {
+    const session = createSession({ sourceType: 'text' });
+    fetchMock.mockResolvedValueOnce(jsonResponse([session]));
 
     const { result } = renderHook(() => useMeetingSessions());
-
-    expect(result.current.savedSessions).toEqual([]);
-    expect(JSON.parse(localStorage.getItem(storageKey) || '[]')).toEqual([]);
-  });
-
-  it('openSavedSession returns null when recording or processing', () => {
-    const { result } = renderHook(() => useMeetingSessions());
-
-    const session = {
-      id: 'open-1',
-      sourceKey: 'open-key',
-      filename: 'To open',
-      createdAt: new Date().toISOString(),
-      meetingType: 'general' as const,
-      rawText: 'Raw',
-      cleanedText: 'Cleaned',
-    };
-
-    const opened = result.current.openSavedSession(session, true, false);
-
-    expect(opened).toBeNull();
-  });
-
-  it('openSavedSession returns session data when not recording or processing', () => {
-    const { result } = renderHook(() => useMeetingSessions());
-
-    const session = {
-      id: 'open-1',
-      sourceKey: 'open-key',
-      filename: 'recording.webm',
-      createdAt: new Date().toISOString(),
-      meetingType: 'design_review' as const,
-      rawText: 'Raw transcript',
-      cleanedText: 'Cleaned transcript',
-    };
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     const opened = result.current.openSavedSession(session, false, false);
 
-    expect(opened).not.toBeNull();
-    expect(opened?.meetingType).toBe('design_review');
-    expect(opened?.sessionInputType).toBe('recording');
+    expect(opened?.sessionInputType).toBe('text');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

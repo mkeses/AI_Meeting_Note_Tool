@@ -14,6 +14,7 @@ from fastapi import (
     FastAPI,
     File,
     HTTPException,
+    Response,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -22,6 +23,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from scipy.signal import resample_poly
 
+from database import MeetingConflictError, MeetingRepository, MeetingStorageError
+from meeting_models import MeetingCreate, MeetingResponse, MeetingUpdate
 from transcription import TranscriptionService
 
 load_dotenv()
@@ -37,6 +40,7 @@ Segment = dict[str, float | str]
 Word = dict[str, float | str]
 
 service: TranscriptionService | None = None
+meeting_repository: MeetingRepository | None = None
 
 # --- Live transcription windowing constants ---
 
@@ -74,7 +78,7 @@ LIVE_VAD_PARAMETERS = {"min_speech_duration_ms": 100}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize the local Whisper and LLM-backed transcription service."""
-    global service
+    global meeting_repository, service
 
     print("🚀 Starting AI Transcript App...")
 
@@ -105,12 +109,15 @@ async def lifespan(app: FastAPI):
         llm_api_key=llm_api_key,
         llm_model=llm_model,
     )
+    meeting_repository = MeetingRepository.from_environment()
+    meeting_repository.initialize()
 
     print("✅ Ready!")
 
     try:
         yield
     finally:
+        meeting_repository = None
         service = None
 
 
@@ -137,6 +144,83 @@ async def get_status():
         "llm_model": os.getenv("LLM_MODEL"),
         "llm_base_url": os.getenv("LLM_BASE_URL"),
     }
+
+
+def get_meeting_repository() -> MeetingRepository:
+    if meeting_repository is None:
+        raise HTTPException(status_code=503, detail="Meeting storage is not ready")
+    return meeting_repository
+
+
+def raise_storage_http_error(error: MeetingStorageError) -> None:
+    print(f"❌ Meeting storage error: {error}")
+    raise HTTPException(
+        status_code=503, detail="Meeting storage is unavailable"
+    ) from error
+
+
+@app.get("/api/meetings", response_model=list[MeetingResponse])
+def list_meetings() -> list[MeetingResponse]:
+    try:
+        meetings = get_meeting_repository().list()
+    except MeetingStorageError as error:
+        raise_storage_http_error(error)
+
+    return [MeetingResponse.from_record(meeting) for meeting in meetings]
+
+
+@app.post("/api/meetings", response_model=MeetingResponse, status_code=201)
+def create_meeting(meeting: MeetingCreate) -> MeetingResponse:
+    try:
+        created_meeting = get_meeting_repository().create(meeting.to_record())
+    except MeetingConflictError as error:
+        raise HTTPException(status_code=409, detail="Meeting already exists") from error
+    except MeetingStorageError as error:
+        raise_storage_http_error(error)
+
+    return MeetingResponse.from_record(created_meeting)
+
+
+@app.get("/api/meetings/{meeting_id}", response_model=MeetingResponse)
+def get_meeting(meeting_id: str) -> MeetingResponse:
+    try:
+        meeting = get_meeting_repository().get(meeting_id)
+    except MeetingStorageError as error:
+        raise_storage_http_error(error)
+
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    return MeetingResponse.from_record(meeting)
+
+
+@app.patch("/api/meetings/{meeting_id}", response_model=MeetingResponse)
+def update_meeting(meeting_id: str, update: MeetingUpdate) -> MeetingResponse:
+    changes = update.to_changes()
+    if not changes:
+        raise HTTPException(status_code=422, detail="At least one field is required")
+
+    try:
+        meeting = get_meeting_repository().update(meeting_id, changes)
+    except MeetingConflictError as error:
+        raise HTTPException(status_code=409, detail="Meeting already exists") from error
+    except MeetingStorageError as error:
+        raise_storage_http_error(error)
+
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    return MeetingResponse.from_record(meeting)
+
+
+@app.delete("/api/meetings/{meeting_id}", status_code=204)
+def delete_meeting(meeting_id: str) -> Response:
+    try:
+        deleted = get_meeting_repository().delete(meeting_id)
+    except MeetingStorageError as error:
+        raise_storage_http_error(error)
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    return Response(status_code=204)
 
 
 @app.get("/api/system-prompt")

@@ -1,71 +1,191 @@
 import { useCallback, useEffect, useState } from 'react';
 
-type MeetingType = 'general' | 'design_review' | 'debug_sync' | 'standup';
+export type MeetingType =
+  | 'general'
+  | 'design_review'
+  | 'debug_sync'
+  | 'standup';
+
+export type MeetingSourceType = 'recording' | 'audio-file' | 'text';
 
 export type SavedSession = {
   id: string;
   sourceKey: string;
   filename: string;
   createdAt: string;
+  updatedAt: string;
   meetingType: MeetingType;
   rawText: string;
   cleanedText: string;
+  sourceType: MeetingSourceType;
+  notes: string;
 };
 
+export type NewSavedSession = Omit<SavedSession, 'updatedAt'>;
+
+type AddSessionResult = {
+  activeSessionId: string;
+  sessionExists: boolean;
+};
+
+type OpenedSession = {
+  activeSessionId: string;
+  rawText: string;
+  editedRawText: string;
+  cleanedText: string;
+  meetingType: MeetingType;
+  sessionFilename: string;
+  sessionInputType: MeetingSourceType;
+};
+
+const meetingTypes: MeetingType[] = [
+  'general',
+  'design_review',
+  'debug_sync',
+  'standup',
+];
+
+const meetingSourceTypes: MeetingSourceType[] = [
+  'recording',
+  'audio-file',
+  'text',
+];
+
+function isMeetingType(value: unknown): value is MeetingType {
+  return (
+    typeof value === 'string' && meetingTypes.includes(value as MeetingType)
+  );
+}
+
+function isMeetingSourceType(value: unknown): value is MeetingSourceType {
+  return (
+    typeof value === 'string' &&
+    meetingSourceTypes.includes(value as MeetingSourceType)
+  );
+}
+
+function isSavedSession(value: unknown): value is SavedSession {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const session = value as Record<string, unknown>;
+
+  return (
+    typeof session.id === 'string' &&
+    typeof session.sourceKey === 'string' &&
+    typeof session.filename === 'string' &&
+    typeof session.createdAt === 'string' &&
+    typeof session.updatedAt === 'string' &&
+    isMeetingType(session.meetingType) &&
+    typeof session.rawText === 'string' &&
+    typeof session.cleanedText === 'string' &&
+    isMeetingSourceType(session.sourceType) &&
+    typeof session.notes === 'string'
+  );
+}
+
+function parseSavedSession(value: unknown): SavedSession {
+  if (!isSavedSession(value)) {
+    throw new Error('Meeting API returned invalid session data');
+  }
+
+  return value;
+}
+
+function parseSavedSessions(value: unknown): SavedSession[] {
+  if (!Array.isArray(value)) {
+    throw new Error('Meeting API returned an invalid session list');
+  }
+
+  return value.map(parseSavedSession);
+}
+
+async function fetchMeetingJson(
+  url: string,
+  init?: RequestInit
+): Promise<unknown> {
+  const response = await fetch(url, init);
+
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}`);
+  }
+
+  return response.json() as Promise<unknown>;
+}
+
+function mergeLoadedSessions(
+  loadedSessions: SavedSession[],
+  currentSessions: SavedSession[]
+): SavedSession[] {
+  const currentById = new Map(
+    currentSessions.map((session) => [session.id, session])
+  );
+  const loadedIds = new Set(loadedSessions.map((session) => session.id));
+
+  return [
+    ...loadedSessions.map((session) => currentById.get(session.id) ?? session),
+    ...currentSessions.filter((session) => !loadedIds.has(session.id)),
+  ];
+}
+
+function formatRequestError(action: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : 'Unknown error';
+  return `Failed to ${action}: ${message}`;
+}
+
 /**
- * Manages meeting session CRUD operations.
- * Currently uses localStorage; designed to be swapped for a backend API later.
+ * Manages meeting-session CRUD through the backend persistence API.
+ * Existing browser localStorage data is deliberately left untouched for a later
+ * migration/import step.
  */
 export function useMeetingSessions() {
-  const [savedSessions, setSavedSessions] = useState<SavedSession[]>(() => {
-    try {
-      const storedSessions = localStorage.getItem('meeting-sessions');
-
-      if (!storedSessions) {
-        return [];
-      }
-
-      const parsedSessions = JSON.parse(
-        storedSessions
-      ) as Partial<SavedSession>[];
-
-      return parsedSessions.map((session) => ({
-        id: session.id || crypto.randomUUID(),
-        sourceKey: session.sourceKey || session.id || crypto.randomUUID(),
-        filename: session.filename || 'Untitled session',
-        createdAt: session.createdAt || new Date().toISOString(),
-        meetingType: session.meetingType || 'general',
-        rawText: session.rawText || '',
-        cleanedText: session.cleanedText || '',
-      }));
-    } catch (error) {
-      console.error('Failed to load saved sessions:', error);
-      return [];
-    }
-  });
+  const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('meeting-sessions', JSON.stringify(savedSessions));
-    } catch (error) {
-      console.error('Failed to save sessions:', error);
-    }
-  }, [savedSessions]);
+    let mounted = true;
+
+    const loadSessions = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const response = await fetchMeetingJson('/api/meetings');
+        const loadedSessions = parseSavedSessions(response);
+
+        if (mounted) {
+          setSavedSessions((currentSessions) =>
+            mergeLoadedSessions(loadedSessions, currentSessions)
+          );
+        }
+      } catch (loadError) {
+        console.error('Failed to load saved meetings:', loadError);
+
+        if (mounted) {
+          setError(formatRequestError('load saved meetings', loadError));
+        }
+      } finally {
+        if (mounted) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void loadSessions();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const openSavedSession = useCallback(
     (
       session: SavedSession,
       isRecording: boolean,
       isProcessing: boolean
-    ): {
-      activeSessionId: string;
-      rawText: string;
-      editedRawText: string;
-      cleanedText: string;
-      meetingType: MeetingType;
-      sessionFilename: string;
-      sessionInputType: 'recording' | 'audio-file' | 'text';
-    } | null => {
+    ): OpenedSession | null => {
       if (isRecording || isProcessing) {
         return null;
       }
@@ -77,25 +197,20 @@ export function useMeetingSessions() {
         cleanedText: session.cleanedText,
         meetingType: session.meetingType,
         sessionFilename: session.filename,
-        sessionInputType:
-          session.filename === 'Pasted transcript'
-            ? 'text'
-            : session.filename === 'recording.webm'
-              ? 'recording'
-              : 'audio-file',
+        sessionInputType: session.sourceType,
       };
     },
     []
   );
 
   const saveSession = useCallback(
-    (
+    async (
       activeSessionId: string | null,
       sessionFilename: string | null,
       editedRawText: string,
       cleanedText: string | null,
       meetingType: MeetingType
-    ) => {
+    ): Promise<string | null> => {
       if (!activeSessionId) {
         return null;
       }
@@ -103,83 +218,143 @@ export function useMeetingSessions() {
       const safeCleanedText = cleanedText ?? '';
       const safeFilename = sessionFilename?.trim() || 'Untitled session';
 
-      let savedId: string | null = null;
-
-      setSavedSessions((currentSessions) =>
-        currentSessions.map((session) => {
-          if (session.id === activeSessionId) {
-            savedId = session.id;
-            return {
-              ...session,
+      try {
+        const response = await fetchMeetingJson(
+          `/api/meetings/${encodeURIComponent(activeSessionId)}`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
               filename: safeFilename,
               rawText: editedRawText,
               cleanedText: safeCleanedText,
               meetingType,
-            };
+            }),
           }
-          return session;
-        })
-      );
+        );
+        const updatedSession = parseSavedSession(response);
 
-      return savedId;
+        setSavedSessions((currentSessions) =>
+          currentSessions.map((session) =>
+            session.id === updatedSession.id ? updatedSession : session
+          )
+        );
+        setError(null);
+        return updatedSession.id;
+      } catch (saveError) {
+        console.error('Failed to save session:', saveError);
+        setError(formatRequestError('save meeting', saveError));
+        return null;
+      }
     },
     []
   );
 
   const addSession = useCallback(
-    (
-      newSession: SavedSession
-    ): { activeSessionId: string; sessionExists: boolean } => {
-      let sessionExists = false;
-      let activeId = newSession.id;
+    async (newSession: NewSavedSession): Promise<AddSessionResult | null> => {
+      const existingSession = savedSessions.find(
+        (session) => session.sourceKey === newSession.sourceKey
+      );
 
-      setSavedSessions((currentSessions) => {
-        const existingSession = currentSessions.find(
-          (session) => session.sourceKey === newSession.sourceKey
-        );
-
+      try {
         if (existingSession) {
-          sessionExists = true;
-          activeId = existingSession.id;
-          return currentSessions.map((session) =>
-            session.id === existingSession.id
-              ? {
-                  ...session,
-                  filename: newSession.filename,
-                  createdAt: newSession.createdAt,
-                  meetingType: newSession.meetingType,
-                  rawText: newSession.rawText,
-                  cleanedText: newSession.cleanedText,
-                }
-              : session
+          const response = await fetchMeetingJson(
+            `/api/meetings/${encodeURIComponent(existingSession.id)}`,
+            {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                filename: newSession.filename,
+                meetingType: newSession.meetingType,
+                rawText: newSession.rawText,
+                cleanedText: newSession.cleanedText,
+                sourceType: newSession.sourceType,
+                notes: newSession.notes,
+              }),
+            }
           );
+          const updatedSession = parseSavedSession(response);
+
+          setSavedSessions((currentSessions) =>
+            currentSessions.map((session) =>
+              session.id === updatedSession.id ? updatedSession : session
+            )
+          );
+          setError(null);
+          return {
+            activeSessionId: updatedSession.id,
+            sessionExists: true,
+          };
         }
 
-        return [newSession, ...currentSessions];
-      });
+        const response = await fetchMeetingJson('/api/meetings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(newSession),
+        });
+        const createdSession = parseSavedSession(response);
 
-      return { activeSessionId: activeId, sessionExists };
+        setSavedSessions((currentSessions) => [
+          createdSession,
+          ...currentSessions,
+        ]);
+        setError(null);
+        return {
+          activeSessionId: createdSession.id,
+          sessionExists: false,
+        };
+      } catch (addError) {
+        console.error('Failed to save session:', addError);
+        setError(formatRequestError('save meeting', addError));
+        return null;
+      }
     },
-    []
+    [savedSessions]
   );
 
   const deleteSession = useCallback(
-    (
+    async (
       sessionId: string
-    ): { wasActive: boolean; activeSessionId: string | null } => {
-      const wasActive = false;
+    ): Promise<{
+      wasActive: boolean;
+      activeSessionId: string | null;
+    } | null> => {
+      try {
+        const response = await fetch(
+          `/api/meetings/${encodeURIComponent(sessionId)}`,
+          {
+            method: 'DELETE',
+          }
+        );
 
-      setSavedSessions((currentSessions) =>
-        currentSessions.filter((session) => session.id !== sessionId)
-      );
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
+        }
 
-      return { wasActive, activeSessionId: null };
+        setSavedSessions((currentSessions) =>
+          currentSessions.filter((session) => session.id !== sessionId)
+        );
+        setError(null);
+        return { wasActive: false, activeSessionId: null };
+      } catch (deleteError) {
+        console.error('Failed to delete session:', deleteError);
+        setError(formatRequestError('delete meeting', deleteError));
+        return null;
+      }
     },
     []
   );
 
   return {
     savedSessions,
+    isLoading,
+    error,
     openSavedSession,
     saveSession,
     addSession,

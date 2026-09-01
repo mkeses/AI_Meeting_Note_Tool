@@ -3,6 +3,7 @@ FROM ghcr.io/astral-sh/uv:0.12.1 AS uv
 FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
+    DATABASE_PATH=/data/meetings.db \
     HF_HOME=/home/app/.cache/huggingface \
     HOME=/home/app \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -23,9 +24,9 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 
-COPY --chown=app:app app.py system_prompt.txt transcription.py ./
-RUN mkdir -p "$HF_HOME" \
-    && chown app:app /home/app/.cache "$HF_HOME"
+COPY --chown=app:app app.py database.py meeting_models.py system_prompt.txt transcription.py ./
+RUN mkdir -p "$HF_HOME" /data \
+    && chown app:app /home/app/.cache "$HF_HOME" /data
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 755 /usr/local/bin/docker-entrypoint.sh

@@ -9,6 +9,7 @@ venv/
 ENV/
 env/
 backend/.venv/
+backend/data/
 .ruff_cache/
 .pytest_cache/
 
