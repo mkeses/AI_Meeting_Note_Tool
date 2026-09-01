@@ -11,6 +11,7 @@ from openai import OpenAI
 
 PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 SYSTEM_PROMPT = PROMPT_FILE.read_text().strip()
+MEETING_NOTES_MAX_TOKENS = 1200
 
 
 class TranscriptionService:
@@ -88,79 +89,35 @@ class TranscriptionService:
     def build_meeting_prompt(self, base_prompt: str, meeting_type: str) -> str:
         meeting_instructions = {
             "general": """
-Meeting type: General engineering meeting.
+Meeting type context: General meeting.
 
-Produce output with exactly these sections:
-1. Summary
-2. Key decisions
-3. Action items
-4. Open questions
-
-Rules:
-- Use bullet points under each section.
-- Keep points specific and concise.
-- Only include information supported by the transcript.
-- If no items exist for a section, write "None noted."
-- For action items, include owner and deadline when mentioned.
-- If owner or deadline is missing, say "owner not specified" or "deadline not specified".
+Use balanced coverage of purpose, discussion, conclusions, decisions, action
+items, open questions, risks, and important details. Keep the common output
+structure.
 """.strip(),
             "design_review": """
-Meeting type: Design review.
+Meeting type context: Design review.
 
-Produce output with exactly these sections:
-1. Design under review
-2. Decisions made
-3. Tradeoffs and constraints
-4. Risks
-5. Open technical questions
-6. Action items
-
-Rules:
-- Use bullet points under each section.
-- Focus on architecture, implementation choices, and technical reasoning.
-- Do not include filler or small talk.
-- Do not guess missing details.
-- If no items exist for a section, write "None noted."
+Give particular attention to alternatives, tradeoffs, constraints, risks,
+decisions, and important technical details. Keep the common output structure.
 """.strip(),
             "debug_sync": """
-Meeting type: Debug sync.
+Meeting type context: Debug sync.
 
-Produce output with exactly these sections:
-1. Problem being investigated
-2. Suspected causes
-3. Evidence and tests run
-4. Blockers
-5. Next debugging steps
-6. Action items
-
-Rules:
-- Use bullet points under each section.
-- Focus on root cause analysis and concrete next steps.
-- Do not include filler or repeated discussion.
-- Do not guess missing technical details.
-- If no items exist for a section, write "None noted."
+Give particular attention to the problem, evidence, hypotheses, tests,
+blockers, and next steps. Keep the common output structure.
 """.strip(),
             "standup": """
-Meeting type: Standup.
+Meeting type context: Standup.
 
-Produce output with exactly these sections:
-1. Progress updates
-2. Current priorities
-3. Blockers
-4. Action items
-
-Rules:
-- Use bullet points under each section.
-- Keep the summary brief and operational.
-- If speakers are identifiable, group updates by person.
-- If speakers are not identifiable, summarize without guessing names.
-- For action items, include owner and deadline when mentioned.
-- If no items exist for a section, write "None noted."
+Give particular attention to progress, priorities, blockers, and action items.
+Group updates by person only when speakers are explicitly identifiable. Keep the
+common output structure.
 """.strip(),
         }
 
         extra = meeting_instructions.get(meeting_type, meeting_instructions["general"])
-        return f"{base_prompt}\n\nAdditional instructions:\n{extra}"
+        return f"{base_prompt}\n\nMeeting-type emphasis:\n{extra}"
 
     def clean_with_llm(self, text, system_prompt=None, meeting_type="general"):
         if not text:
@@ -179,7 +136,7 @@ Rules:
                 {"role": "user", "content": f"Transcript:\n{text}"},
             ],
             temperature=0.2,
-            max_tokens=400,
+            max_tokens=MEETING_NOTES_MAX_TOKENS,
         )
 
         cleaned = response.choices[0].message.content.strip()

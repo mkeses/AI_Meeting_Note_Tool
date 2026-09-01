@@ -307,6 +307,107 @@ describe('App live transcript editor', () => {
     expect(title).toHaveValue(updatedSession.filename);
   });
 
+  it('cleans and persists a pasted transcript as a text meeting', async () => {
+    const user = userEvent.setup();
+    const transcript = 'We decided to launch the pilot next Tuesday.';
+    const cleanedText = '## Meeting Overview\nThe pilot launches next Tuesday.';
+    let createdSession: SavedSession | null = null;
+    cleanupState.cleanTranscription.mockResolvedValueOnce(cleanedText);
+    fetchMock.mockImplementation((url, init) => {
+      if (url === '/api/meetings' && init === undefined) {
+        return Promise.resolve(jsonResponse([]));
+      }
+
+      if (url === '/api/meetings' && init?.method === 'POST') {
+        const payload = requestBody(init);
+        createdSession = createSession({
+          id: requiredString(payload, 'id'),
+          sourceKey: requiredString(payload, 'sourceKey'),
+          filename: requiredString(payload, 'filename'),
+          createdAt: requiredString(payload, 'createdAt'),
+          meetingType: 'general',
+          rawText: requiredString(payload, 'rawText'),
+          cleanedText: requiredString(payload, 'cleanedText'),
+          sourceType: 'text',
+          notes: '',
+        });
+        return Promise.resolve(jsonResponse(createdSession, 201));
+      }
+
+      throw new Error(`Unexpected request: ${requestUrl(url)}`);
+    });
+
+    render(<App />);
+
+    await user.click(screen.getByText('Use an existing text transcript'));
+    await user.type(
+      screen.getByRole('textbox', { name: 'Text transcript input' }),
+      transcript
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'Process transcript' })
+    );
+
+    await waitFor(() => {
+      expect(cleanupState.cleanTranscription).toHaveBeenCalledWith(transcript);
+      expect(createdSession).not.toBeNull();
+    });
+
+    expect(
+      screen.getByText('The pilot launches next Tuesday.')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Meeting title' })).toHaveValue(
+      'Pasted transcript'
+    );
+
+    const createCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/meetings' && init?.method === 'POST'
+    );
+    if (!createCall) {
+      throw new Error('Expected the pasted transcript to create a meeting.');
+    }
+
+    const payload = requestBody(createCall[1]);
+    expect(requiredString(payload, 'sourceKey')).toMatch(/^text:/);
+    expect(payload).toMatchObject({
+      filename: 'Pasted transcript',
+      meetingType: 'general',
+      rawText: transcript,
+      cleanedText,
+      sourceType: 'text',
+      notes: '',
+    });
+  });
+
+  it('keeps a pasted transcript available and reports an unexpected LLM failure', async () => {
+    const user = userEvent.setup();
+    const transcript = 'The team discussed the pilot timeline.';
+    cleanupState.cleanTranscription.mockRejectedValueOnce(
+      new Error('LLM unavailable')
+    );
+
+    render(<App />);
+
+    await user.click(screen.getByText('Use an existing text transcript'));
+    await user.type(
+      screen.getByRole('textbox', { name: 'Text transcript input' }),
+      transcript
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'Process transcript' })
+    );
+
+    expect(
+      await screen.findByText('Processing failed: LLM unavailable')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Transcript ready')).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) => url === '/api/meetings' && init?.method === 'POST'
+      )
+    ).toBe(false);
+  });
+
   it('debounces rapid note edits into one notes-only PATCH', async () => {
     const session = createSession();
     const updatedSession = createSession({

@@ -24,6 +24,8 @@ type ParsedSection = {
 
 const SECTION_ALIASES: Record<string, string> = {
   summary: 'Summary',
+  'meeting overview': 'Meeting Overview',
+  'key discussion points': 'Key Discussion Points',
   'key decisions': 'Key Decisions',
   decisions: 'Key Decisions',
   'decisions made': 'Key Decisions',
@@ -32,6 +34,8 @@ const SECTION_ALIASES: Record<string, string> = {
   blockers: 'Blockers',
   'open questions': 'Open Questions',
   questions: 'Open Questions',
+  'blockers / risks': 'Blockers / Risks',
+  'important details': 'Important Details',
   'next steps': 'Next Steps',
   'current priorities': 'Current Priorities',
   'progress updates': 'Progress Updates',

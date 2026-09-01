@@ -699,13 +699,16 @@ function App() {
 
   const handleTextSubmit = useCallback(
     async (text: string) => {
-      if (!text.trim() || isProcessing || audioIsRecording) {
+      const submittedText = text.trim();
+
+      if (!submittedText || isProcessing || audioIsRecording) {
         return;
       }
 
       setError(null);
-      setRawText(text);
-      setEditedRawText(text);
+      setActiveSessionId(null);
+      setRawText(submittedText);
+      setEditedRawText(submittedText);
       setCleanedText(null);
       setSessionCreatedAt(null);
       setSessionNotes('');
@@ -717,12 +720,48 @@ function App() {
       setSessionInputType('text');
 
       try {
-        await cleanTranscription(text);
+        const cleaned = await cleanTranscription(submittedText);
+        const createdAt = new Date().toISOString();
+        const savedSession = await addSession({
+          id: crypto.randomUUID(),
+          sourceKey: `text:${crypto.randomUUID()}`,
+          filename: 'Pasted transcript',
+          createdAt,
+          meetingType,
+          rawText: submittedText,
+          cleanedText: cleaned,
+          sourceType: 'text',
+          notes: '',
+        });
+
+        if (savedSession) {
+          setActiveSessionId(savedSession.activeSessionId);
+
+          if (activeMeetingSearchQuery) {
+            await searchSavedMeetings(activeMeetingSearchQuery);
+          }
+        }
+
+        setSessionCreatedAt(createdAt);
+        setCleanedText(cleaned);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        setError(`Processing failed: ${message}`);
+        setIsCleaningWithLLM(false);
       } finally {
         setIsProcessing(false);
       }
     },
-    [isProcessing, audioIsRecording, setIsCleaningWithLLM, cleanTranscription]
+    [
+      activeMeetingSearchQuery,
+      addSession,
+      audioIsRecording,
+      cleanTranscription,
+      isProcessing,
+      meetingType,
+      searchSavedMeetings,
+      setIsCleaningWithLLM,
+    ]
   );
 
   const copyToClipboard = useCallback((text: string) => {
