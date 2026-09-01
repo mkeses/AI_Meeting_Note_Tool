@@ -7,6 +7,7 @@ thin and a future database implementation can preserve the same CRUD boundary.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -89,6 +90,64 @@ class MeetingRepository:
                     ON meetings (created_at DESC)
                     """
                 )
+                connection.execute(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts
+                    USING fts5(
+                        filename,
+                        cleaned_text,
+                        notes,
+                        content='meetings',
+                        content_rowid='rowid'
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TRIGGER IF NOT EXISTS meetings_fts_after_insert
+                    AFTER INSERT ON meetings BEGIN
+                        INSERT INTO meetings_fts(
+                            rowid, filename, cleaned_text, notes
+                        ) VALUES (
+                            new.rowid, new.filename, new.cleaned_text, new.notes
+                        );
+                    END
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TRIGGER IF NOT EXISTS meetings_fts_after_delete
+                    AFTER DELETE ON meetings BEGIN
+                        INSERT INTO meetings_fts(
+                            meetings_fts, rowid, filename, cleaned_text, notes
+                        ) VALUES (
+                            'delete', old.rowid, old.filename,
+                            old.cleaned_text, old.notes
+                        );
+                    END
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TRIGGER IF NOT EXISTS meetings_fts_after_update
+                    AFTER UPDATE OF filename, cleaned_text, notes ON meetings BEGIN
+                        INSERT INTO meetings_fts(
+                            meetings_fts, rowid, filename, cleaned_text, notes
+                        ) VALUES (
+                            'delete', old.rowid, old.filename,
+                            old.cleaned_text, old.notes
+                        );
+                        INSERT INTO meetings_fts(
+                            rowid, filename, cleaned_text, notes
+                        ) VALUES (
+                            new.rowid, new.filename, new.cleaned_text, new.notes
+                        );
+                    END
+                    """
+                )
+                connection.execute(
+                    "INSERT INTO meetings_fts(meetings_fts) VALUES ('rebuild')"
+                )
         except sqlite3.Error as error:
             raise MeetingStorageError("Unable to initialize meeting storage") from error
 
@@ -149,6 +208,29 @@ class MeetingRepository:
 
         return self._row_to_meeting(row) if row else None
 
+    def search(self, query: str) -> list[Meeting]:
+        """Return meetings that match title, cleaned transcript, or notes."""
+        fts_query = self._to_fts_query(query)
+        if not fts_query:
+            return []
+
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT meetings.*
+                    FROM meetings_fts
+                    JOIN meetings ON meetings.rowid = meetings_fts.rowid
+                    WHERE meetings_fts MATCH ?
+                    ORDER BY bm25(meetings_fts), meetings.created_at DESC, meetings.id DESC
+                    """,
+                    (fts_query,),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise MeetingStorageError("Unable to search meetings") from error
+
+        return [self._row_to_meeting(row) for row in rows]
+
     def update(self, meeting_id: str, changes: dict[str, str]) -> Meeting | None:
         if not changes:
             return self.get(meeting_id)
@@ -206,6 +288,12 @@ class MeetingRepository:
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 5000")
         return connection
+
+    @staticmethod
+    def _to_fts_query(query: str) -> str:
+        """Build a safe, prefix-capable FTS query from user-entered text."""
+        terms = re.findall(r"\w+", query, flags=re.UNICODE)
+        return " AND ".join(f'"{term}"*' for term in terms)
 
     @staticmethod
     def _row_to_meeting(row: sqlite3.Row) -> Meeting:

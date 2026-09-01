@@ -21,6 +21,7 @@ import { useLiveTranscript } from './hooks/useLiveTranscript.ts';
 import type {
   MeetingSourceType,
   NewSavedSession,
+  SavedSession,
 } from './hooks/useMeetingSessions';
 import { usePushToTalk } from './hooks/usePushToTalk';
 
@@ -32,6 +33,15 @@ interface TranscriptionResponse {
 
 type MeetingType = 'general' | 'design_review' | 'debug_sync' | 'standup';
 type SessionInputType = MeetingSourceType | null;
+
+type RecordingMeeting = {
+  id: string;
+  sourceKey: string;
+  createdAt: string;
+  creationPromise: Promise<string | null>;
+  finalizationStarted: boolean;
+  cleanupStarted: boolean;
+};
 
 interface MeetingOption {
   value: MeetingType;
@@ -71,6 +81,8 @@ const MEETING_OPTIONS: MeetingOption[] = [
   },
 ];
 
+const NOTES_AUTOSAVE_DELAY_MS = 500;
+
 function formatDuration(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -106,9 +118,24 @@ function App() {
   const [sessionFilename, setSessionFilename] = useState<string | null>(null);
   const [sessionInputType, setSessionInputType] =
     useState<SessionInputType>(null);
+  const [sessionCreatedAt, setSessionCreatedAt] = useState<string | null>(null);
+  const [sessionNotes, setSessionNotes] = useState('');
+  const [notesSaveStatus, setNotesSaveStatus] = useState<string | null>(null);
+  const [meetingSearchQuery, setMeetingSearchQuery] = useState('');
+  const [activeMeetingSearchQuery, setActiveMeetingSearchQuery] = useState<
+    string | null
+  >(null);
+  const [searchResults, setSearchResults] = useState<SavedSession[] | null>(
+    null
+  );
+  const [isSearchingMeetings, setIsSearchingMeetings] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const recordingSourceKeyRef = useRef<string | null>(null);
+  const recordingMeetingRef = useRef<RecordingMeeting | null>(null);
+  const sessionNotesRef = useRef('');
+  const notesAutosaveTimerRef = useRef<number | null>(null);
+  const notesSaveSequenceRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const liveTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const savedSelectionRef = useRef({ start: 0, end: 0 });
@@ -148,7 +175,9 @@ function App() {
     isLoading: areSessionsLoading,
     error: sessionError,
     openSavedSession,
+    searchSessions,
     saveSession,
+    saveNotes,
     addSession,
     deleteSession,
   } = sessions;
@@ -158,6 +187,159 @@ function App() {
       setError(sessionError);
     }
   }, [sessionError]);
+
+  useEffect(() => {
+    sessionNotesRef.current = sessionNotes;
+  }, [sessionNotes]);
+
+  useEffect(() => {
+    notesSaveSequenceRef.current += 1;
+    setNotesSaveStatus(null);
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    if (
+      !audioIsRecording ||
+      sessionInputType !== 'recording' ||
+      !recordingSourceKeyRef.current
+    ) {
+      return;
+    }
+
+    const sourceKey = recordingSourceKeyRef.current;
+    const existingMeeting = recordingMeetingRef.current;
+
+    if (existingMeeting?.sourceKey === sourceKey) {
+      return;
+    }
+
+    const recordingMeeting: RecordingMeeting = {
+      id: crypto.randomUUID(),
+      sourceKey,
+      createdAt: new Date().toISOString(),
+      creationPromise: Promise.resolve(null),
+      finalizationStarted: false,
+      cleanupStarted: false,
+    };
+
+    recordingMeetingRef.current = recordingMeeting;
+    recordingMeeting.creationPromise = addSession({
+      id: recordingMeeting.id,
+      sourceKey: recordingMeeting.sourceKey,
+      filename: 'recording.webm',
+      createdAt: recordingMeeting.createdAt,
+      meetingType,
+      rawText: '',
+      cleanedText: '',
+      sourceType: 'recording',
+      notes: '',
+    }).then((result) => result?.activeSessionId ?? null);
+
+    void recordingMeeting.creationPromise.then((createdSessionId) => {
+      if (
+        createdSessionId &&
+        recordingMeetingRef.current === recordingMeeting
+      ) {
+        setActiveSessionId(createdSessionId);
+        setSessionCreatedAt(recordingMeeting.createdAt);
+      }
+    });
+  }, [addSession, audioIsRecording, meetingType, sessionInputType]);
+
+  useEffect(() => {
+    const recordingMeeting = recordingMeetingRef.current;
+
+    if (
+      !recordingMeeting ||
+      audioIsRecording ||
+      isProcessing ||
+      recordingMeeting.finalizationStarted ||
+      recordingMeeting.cleanupStarted ||
+      sessionNotesRef.current.trim()
+    ) {
+      return;
+    }
+
+    recordingMeeting.cleanupStarted = true;
+
+    void recordingMeeting.creationPromise.then(async (createdSessionId) => {
+      if (
+        !createdSessionId ||
+        recordingMeetingRef.current !== recordingMeeting ||
+        recordingMeeting.finalizationStarted ||
+        sessionNotesRef.current.trim()
+      ) {
+        return;
+      }
+
+      const deletedSession = await deleteSession(createdSessionId);
+
+      if (deletedSession && recordingMeetingRef.current === recordingMeeting) {
+        recordingMeetingRef.current = null;
+        setActiveSessionId((currentSessionId) =>
+          currentSessionId === createdSessionId ? null : currentSessionId
+        );
+        setSessionCreatedAt(null);
+      }
+    });
+  }, [audioIsRecording, deleteSession, isProcessing]);
+
+  const activeSavedSession = activeSessionId
+    ? savedSessions.find((session) => session.id === activeSessionId)
+    : null;
+
+  useEffect(() => {
+    if (
+      !activeSessionId ||
+      !activeSavedSession ||
+      activeSavedSession.notes === sessionNotes
+    ) {
+      return;
+    }
+
+    const notesToSave = sessionNotes;
+    const saveSequence = notesSaveSequenceRef.current + 1;
+    notesSaveSequenceRef.current = saveSequence;
+
+    notesAutosaveTimerRef.current = window.setTimeout(() => {
+      notesAutosaveTimerRef.current = null;
+      setNotesSaveStatus('Saving…');
+
+      void saveNotes(activeSessionId, notesToSave).then((savedSession) => {
+        if (notesSaveSequenceRef.current !== saveSequence) {
+          return;
+        }
+
+        setNotesSaveStatus(savedSession ? 'Saved' : null);
+      });
+    }, NOTES_AUTOSAVE_DELAY_MS);
+
+    return () => {
+      if (notesAutosaveTimerRef.current !== null) {
+        window.clearTimeout(notesAutosaveTimerRef.current);
+        notesAutosaveTimerRef.current = null;
+      }
+    };
+  }, [activeSavedSession, activeSessionId, saveNotes, sessionNotes]);
+
+  const searchSavedMeetings = useCallback(
+    async (query: string) => {
+      const normalizedQuery = query.trim();
+
+      if (!normalizedQuery) {
+        setActiveMeetingSearchQuery(null);
+        setSearchResults(null);
+        return;
+      }
+
+      setIsSearchingMeetings(true);
+      setActiveMeetingSearchQuery(normalizedQuery);
+      const results = await searchSessions(normalizedQuery);
+      setSearchResults(results ?? []);
+      setIsSearchingMeetings(false);
+    },
+    [searchSessions]
+  );
 
   const processFinalTranscript = useCallback(
     async (transcript: string, filename: string) => {
@@ -176,35 +358,73 @@ function App() {
 
       const sourceType: Exclude<SessionInputType, null> =
         filename === 'recording.webm' ? 'recording' : 'audio-file';
-      const newSession: NewSavedSession = {
-        id: crypto.randomUUID(),
-        sourceKey:
-          filename === 'recording.webm'
-            ? recordingSourceKeyRef.current ||
-              `recording:${crypto.randomUUID()}`
-            : `audio-file:${filename}`,
-        filename,
-        createdAt: new Date().toISOString(),
-        meetingType,
-        rawText: finalText,
-        cleanedText: cleaned,
-        sourceType,
-        notes: '',
-      };
+      const recordingMeeting =
+        sourceType === 'recording' &&
+        recordingMeetingRef.current?.sourceKey === recordingSourceKeyRef.current
+          ? recordingMeetingRef.current
+          : null;
+      let savedSessionId: string | null = null;
+      let createdAt = new Date().toISOString();
 
-      const savedSession = await addSession(newSession);
-      if (savedSession) {
-        setActiveSessionId(savedSession.activeSessionId);
+      if (recordingMeeting) {
+        recordingMeeting.finalizationStarted = true;
+        const createdSessionId = await recordingMeeting.creationPromise;
+
+        if (createdSessionId) {
+          savedSessionId = await saveSession(
+            createdSessionId,
+            filename,
+            finalText,
+            cleaned,
+            meetingType
+          );
+          createdAt = recordingMeeting.createdAt;
+        }
       } else {
+        const newSession: NewSavedSession = {
+          id: crypto.randomUUID(),
+          sourceKey:
+            filename === 'recording.webm'
+              ? recordingSourceKeyRef.current ||
+                `recording:${crypto.randomUUID()}`
+              : `audio-file:${filename}`,
+          filename,
+          createdAt,
+          meetingType,
+          rawText: finalText,
+          cleanedText: cleaned,
+          sourceType,
+          notes: sessionNotes,
+        };
+        const savedSession = await addSession(newSession);
+        savedSessionId = savedSession?.activeSessionId ?? null;
+      }
+
+      if (savedSessionId) {
+        setActiveSessionId(savedSessionId);
+
+        if (activeMeetingSearchQuery) {
+          await searchSavedMeetings(activeMeetingSearchQuery);
+        }
+      } else if (!recordingMeeting) {
         setActiveSessionId(null);
       }
 
       setSessionFilename(filename);
       setSessionInputType(sourceType);
+      setSessionCreatedAt(createdAt);
 
       setCleanedText(cleaned);
     },
-    [addSession, cleanTranscription, meetingType]
+    [
+      activeMeetingSearchQuery,
+      addSession,
+      cleanTranscription,
+      meetingType,
+      saveSession,
+      searchSavedMeetings,
+      sessionNotes,
+    ]
   );
 
   const liveTranscript = useLiveTranscript({
@@ -265,19 +485,32 @@ function App() {
     textarea.setSelectionRange(start, end);
   }, [liveCommittedText]);
 
+  const beginRecording = useCallback(async () => {
+    recordingMeetingRef.current = null;
+    setActiveSessionId(null);
+    setSessionCreatedAt(null);
+    setSessionNotes('');
+    setNotesSaveStatus(null);
+    await audioStartRecording(
+      liveSocketRef,
+      resetLiveTranscriptState,
+      setSessionFilename,
+      setSessionInputType,
+      recordingSourceKeyRef,
+      handleSocketMessage
+    );
+  }, [
+    audioStartRecording,
+    liveSocketRef,
+    resetLiveTranscriptState,
+    handleSocketMessage,
+  ]);
+
   // Push-to-talk keyboard shortcuts
   usePushToTalk({
     isRecording: audioIsRecording,
     isProcessing,
-    startRecording: () =>
-      audioStartRecording(
-        liveSocketRef,
-        resetLiveTranscriptState,
-        setSessionFilename,
-        setSessionInputType,
-        recordingSourceKeyRef,
-        handleSocketMessage
-      ),
+    startRecording: beginRecording,
     stopRecording: () => audioStopRecording(liveSocketRef),
   });
 
@@ -307,15 +540,28 @@ function App() {
       window.setTimeout(() => {
         setSaveMessage(null);
       }, 2000);
+
+      if (activeMeetingSearchQuery) {
+        await searchSavedMeetings(activeMeetingSearchQuery);
+      }
     }
   }, [
     activeSessionId,
+    activeMeetingSearchQuery,
     sessionFilename,
     editedRawText,
     cleanedText,
     meetingType,
     saveSession,
+    searchSavedMeetings,
   ]);
+
+  const clearMeetingSearch = useCallback(() => {
+    setMeetingSearchQuery('');
+    setActiveMeetingSearchQuery(null);
+    setSearchResults(null);
+    setIsSearchingMeetings(false);
+  }, []);
 
   const deleteSavedSession = useCallback(
     async (sessionId: string) => {
@@ -323,6 +569,12 @@ function App() {
       if (!deletedSession) {
         return;
       }
+
+      setSearchResults((currentResults) =>
+        currentResults
+          ? currentResults.filter((session) => session.id !== sessionId)
+          : null
+      );
 
       const { wasActive } = deletedSession;
 
@@ -333,6 +585,9 @@ function App() {
         setCleanedText(null);
         setSessionFilename(null);
         setSessionInputType(null);
+        setSessionCreatedAt(null);
+        setSessionNotes('');
+        setNotesSaveStatus(null);
         resetLiveTranscriptState();
         setError(null);
         setIsCopied(false);
@@ -382,24 +637,7 @@ function App() {
     [processFinalTranscript, setIsCleaningWithLLM]
   );
 
-  const startRecording = useCallback(async () => {
-    await audioStartRecording(
-      liveSocketRef,
-      resetLiveTranscriptState,
-      setSessionFilename,
-      setSessionInputType,
-      recordingSourceKeyRef,
-      handleSocketMessage
-    );
-  }, [
-    audioStartRecording,
-    liveSocketRef,
-    resetLiveTranscriptState,
-    setSessionFilename,
-    setSessionInputType,
-    recordingSourceKeyRef,
-    handleSocketMessage,
-  ]);
+  const startRecording = beginRecording;
 
   const stopRecording = useCallback(() => {
     audioStopRecording(liveSocketRef);
@@ -416,6 +654,9 @@ function App() {
       setRawText(null);
       setEditedRawText('');
       setCleanedText(null);
+      setSessionCreatedAt(null);
+      setSessionNotes('');
+      setNotesSaveStatus(null);
       setIsCleaningWithLLM(false);
       setRecordingSeconds(0);
       setSessionFilename(file.name);
@@ -466,6 +707,9 @@ function App() {
       setRawText(text);
       setEditedRawText(text);
       setCleanedText(null);
+      setSessionCreatedAt(null);
+      setSessionNotes('');
+      setNotesSaveStatus(null);
       setIsCleaningWithLLM(false);
       setIsProcessing(true);
       setRecordingSeconds(0);
@@ -498,6 +742,10 @@ function App() {
   const selectedMeeting =
     MEETING_OPTIONS.find((option) => option.value === meetingType) ??
     MEETING_OPTIONS.find((option) => option.value === 'general')!;
+  const isMeetingSearchActive = activeMeetingSearchQuery !== null;
+  const displayedSessions = isMeetingSearchActive
+    ? (searchResults ?? [])
+    : savedSessions.slice(0, 5);
 
   const statusText = audioIsRecording
     ? 'Recording'
@@ -514,6 +762,9 @@ function App() {
     setRawText(null);
     setEditedRawText('');
     setCleanedText(null);
+    setSessionCreatedAt(null);
+    setSessionNotes('');
+    setNotesSaveStatus(null);
     resetLiveTranscriptState();
     setError(null);
     setIsCopied(false);
@@ -597,17 +848,63 @@ function App() {
               <button className={styles.navItem} type="button">
                 Recent sessions
               </button>
+              <form
+                className={styles.meetingSearch}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void searchSavedMeetings(meetingSearchQuery);
+                }}
+              >
+                <input
+                  className={styles.meetingSearchInput}
+                  value={meetingSearchQuery}
+                  onChange={(event) => {
+                    const nextQuery = event.target.value;
+                    setMeetingSearchQuery(nextQuery);
+
+                    if (!nextQuery.trim()) {
+                      setActiveMeetingSearchQuery(null);
+                      setSearchResults(null);
+                      setIsSearchingMeetings(false);
+                    }
+                  }}
+                  placeholder="Search meetings"
+                  aria-label="Search saved meetings"
+                />
+                <button
+                  className={styles.meetingSearchButton}
+                  type="submit"
+                  disabled={isSearchingMeetings || !meetingSearchQuery.trim()}
+                >
+                  Search
+                </button>
+                {isMeetingSearchActive && (
+                  <button
+                    className={styles.meetingSearchClearButton}
+                    type="button"
+                    onClick={clearMeetingSearch}
+                  >
+                    Clear search
+                  </button>
+                )}
+              </form>
               <div className={styles.recentSessionsList}>
                 {areSessionsLoading ? (
                   <div className={styles.emptyRecentSessions}>
                     Loading saved sessions...
                   </div>
-                ) : savedSessions.length === 0 ? (
+                ) : isSearchingMeetings ? (
                   <div className={styles.emptyRecentSessions}>
-                    No saved sessions yet.
+                    Searching saved meetings...
+                  </div>
+                ) : displayedSessions.length === 0 ? (
+                  <div className={styles.emptyRecentSessions}>
+                    {isMeetingSearchActive
+                      ? `No saved meetings match “${activeMeetingSearchQuery}”.`
+                      : 'No saved sessions yet.'}
                   </div>
                 ) : (
-                  savedSessions.slice(0, 5).map((session) => (
+                  displayedSessions.map((session) => (
                     <div className={styles.recentSessionItem} key={session.id}>
                       <button
                         className={`${styles.recentSessionOpenButton} ${
@@ -632,6 +929,8 @@ function App() {
                             meetingType,
                             sessionFilename,
                             sessionInputType,
+                            sessionCreatedAt,
+                            notes,
                           } = result;
 
                           setActiveSessionId(newActiveId);
@@ -641,6 +940,8 @@ function App() {
                           setMeetingType(meetingType);
                           setSessionFilename(sessionFilename);
                           setSessionInputType(sessionInputType);
+                          setSessionCreatedAt(sessionCreatedAt);
+                          setSessionNotes(notes);
                           resetLiveTranscriptState();
                           setError(null);
                           setIsCopied(false);
@@ -673,9 +974,6 @@ function App() {
                   ))
                 )}
               </div>
-              <button className={styles.navItem} type="button">
-                Saved notes
-              </button>
             </nav>
 
             <div className={styles.localStatus}>
@@ -1003,17 +1301,17 @@ function App() {
             </section>
           </main>
 
-          <aside className={styles.sessionPanel} aria-label="Current session">
+          <aside className={styles.sessionPanel} aria-label="Meeting workspace">
             <section className={styles.sessionCard}>
-              <h2 className={styles.sessionCardTitle}>Current session</h2>
-              {sessionFilename ? (
+              <h2 className={styles.sessionCardTitle}>Meeting workspace</h2>
+              {sessionFilename !== null ? (
                 <>
                   <input
                     className={styles.sessionFilenameInput}
                     value={sessionFilename}
                     onChange={(event) => setSessionFilename(event.target.value)}
-                    placeholder="Session name"
-                    aria-label="Session name"
+                    placeholder="Meeting title"
+                    aria-label="Meeting title"
                   />
                   <button
                     type="button"
@@ -1029,16 +1327,42 @@ function App() {
                     <span className={styles.saveMessage}>{saveMessage}</span>
                   )}
                   <div className={styles.sessionMeta}>
-                    {sessionInputType === 'recording'
-                      ? 'Audio recording'
-                      : sessionInputType === 'audio-file'
-                        ? 'Uploaded audio file'
-                        : 'Pasted transcript'}
+                    <div>
+                      {sessionInputType === 'recording'
+                        ? 'Audio recording'
+                        : sessionInputType === 'audio-file'
+                          ? 'Uploaded audio file'
+                          : 'Pasted transcript'}
+                    </div>
+                    <div>Meeting type: {selectedMeeting.label}</div>
+                    {sessionCreatedAt && (
+                      <div>Saved {formatSessionDate(sessionCreatedAt)}</div>
+                    )}
                   </div>
                   {sessionInputType === 'recording' && (
                     <div className={styles.sessionDuration}>
                       {formatDuration(recordingSeconds)}
                     </div>
+                  )}
+                  <label
+                    className={styles.sessionNotesLabel}
+                    htmlFor="meeting-notes"
+                  >
+                    Notes
+                  </label>
+                  <textarea
+                    className={styles.sessionNotesInput}
+                    id="meeting-notes"
+                    value={sessionNotes}
+                    onChange={(event) => setSessionNotes(event.target.value)}
+                    placeholder="Add meeting notes, follow-ups, or context..."
+                    rows={7}
+                    aria-label="Meeting notes"
+                  />
+                  {notesSaveStatus && (
+                    <span className={styles.saveMessage} aria-live="polite">
+                      {notesSaveStatus}
+                    </span>
                   )}
                 </>
               ) : (

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type MeetingType =
   | 'general'
@@ -36,6 +36,8 @@ type OpenedSession = {
   meetingType: MeetingType;
   sessionFilename: string;
   sessionInputType: MeetingSourceType;
+  sessionCreatedAt: string;
+  notes: string;
 };
 
 const meetingTypes: MeetingType[] = [
@@ -143,6 +145,7 @@ export function useMeetingSessions() {
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const notesSaveRevisionRef = useRef(new Map<string, number>());
 
   useEffect(() => {
     let mounted = true;
@@ -198,7 +201,33 @@ export function useMeetingSessions() {
         meetingType: session.meetingType,
         sessionFilename: session.filename,
         sessionInputType: session.sourceType,
+        sessionCreatedAt: session.createdAt,
+        notes: session.notes,
       };
+    },
+    []
+  );
+
+  const searchSessions = useCallback(
+    async (query: string): Promise<SavedSession[] | null> => {
+      const normalizedQuery = query.trim();
+      if (!normalizedQuery) {
+        return [];
+      }
+
+      try {
+        const response = await fetchMeetingJson(
+          `/api/meetings/search?q=${encodeURIComponent(normalizedQuery)}`
+        );
+        const sessions = parseSavedSessions(response);
+
+        setError(null);
+        return sessions;
+      } catch (searchError) {
+        console.error('Failed to search meetings:', searchError);
+        setError(formatRequestError('search meetings', searchError));
+        return null;
+      }
     },
     []
   );
@@ -217,6 +246,30 @@ export function useMeetingSessions() {
 
       const safeCleanedText = cleanedText ?? '';
       const safeFilename = sessionFilename?.trim() || 'Untitled session';
+      const currentSession = savedSessions.find(
+        (session) => session.id === activeSessionId
+      );
+      const changes: Record<string, string> = {};
+
+      if (!currentSession || currentSession.filename !== safeFilename) {
+        changes.filename = safeFilename;
+      }
+
+      if (!currentSession || currentSession.rawText !== editedRawText) {
+        changes.rawText = editedRawText;
+      }
+
+      if (!currentSession || currentSession.cleanedText !== safeCleanedText) {
+        changes.cleanedText = safeCleanedText;
+      }
+
+      if (!currentSession || currentSession.meetingType !== meetingType) {
+        changes.meetingType = meetingType;
+      }
+
+      if (Object.keys(changes).length === 0) {
+        return activeSessionId;
+      }
 
       try {
         const response = await fetchMeetingJson(
@@ -226,19 +279,16 @@ export function useMeetingSessions() {
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-              filename: safeFilename,
-              rawText: editedRawText,
-              cleanedText: safeCleanedText,
-              meetingType,
-            }),
+            body: JSON.stringify(changes),
           }
         );
         const updatedSession = parseSavedSession(response);
 
         setSavedSessions((currentSessions) =>
           currentSessions.map((session) =>
-            session.id === updatedSession.id ? updatedSession : session
+            session.id === updatedSession.id
+              ? { ...updatedSession, notes: session.notes }
+              : session
           )
         );
         setError(null);
@@ -246,6 +296,57 @@ export function useMeetingSessions() {
       } catch (saveError) {
         console.error('Failed to save session:', saveError);
         setError(formatRequestError('save meeting', saveError));
+        return null;
+      }
+    },
+    [savedSessions]
+  );
+
+  const saveNotes = useCallback(
+    async (
+      activeSessionId: string | null,
+      notes: string
+    ): Promise<SavedSession | null> => {
+      if (!activeSessionId) {
+        return null;
+      }
+
+      const nextRevision =
+        (notesSaveRevisionRef.current.get(activeSessionId) ?? 0) + 1;
+      notesSaveRevisionRef.current.set(activeSessionId, nextRevision);
+
+      try {
+        const response = await fetchMeetingJson(
+          `/api/meetings/${encodeURIComponent(activeSessionId)}`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ notes }),
+          }
+        );
+        const updatedSession = parseSavedSession(response);
+
+        if (
+          notesSaveRevisionRef.current.get(activeSessionId) === nextRevision
+        ) {
+          setSavedSessions((currentSessions) =>
+            currentSessions.map((session) =>
+              session.id === updatedSession.id ? updatedSession : session
+            )
+          );
+          setError(null);
+        }
+        return updatedSession;
+      } catch (saveError) {
+        console.error('Failed to save notes:', saveError);
+
+        if (
+          notesSaveRevisionRef.current.get(activeSessionId) === nextRevision
+        ) {
+          setError(formatRequestError('save notes', saveError));
+        }
         return null;
       }
     },
@@ -356,7 +457,9 @@ export function useMeetingSessions() {
     isLoading,
     error,
     openSavedSession,
+    searchSessions,
     saveSession,
+    saveNotes,
     addSession,
     deleteSession,
   };

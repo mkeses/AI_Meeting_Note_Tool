@@ -2,13 +2,13 @@
 
 A local-first AI meeting transcription and note-taking application built around real-time audio processing, editable live transcription, and structured AI-generated meeting notes.
 
-The project is designed as an engineering-focused application rather than a simple transcription demo. It combines browser audio capture, WebSocket streaming, rolling-window speech recognition, frontend state management, user-edit protection, local persistence, and automated testing.
+The project is designed as an engineering-focused application rather than a simple transcription demo. It combines browser audio capture, WebSocket streaming, rolling-window speech recognition, frontend state management, user-edit protection, SQLite-backed meeting persistence, and automated testing.
 
 ## Project Status
 
-**Current status:** Core transcription and note-taking functionality is implemented and covered by frontend Vitest and backend pytest suites. The application currently runs locally using a containerized development environment.
+**Current status:** Core transcription, persistent meeting workspaces, and database-backed full-text search are implemented and covered by frontend Vitest and backend pytest suites. The application currently runs locally using a containerized development environment.
 
-The next development phase focuses on searchable meeting history and export workflows before moving toward desktop packaging and remote deployment.
+The next development phase focuses on export workflows before moving toward desktop packaging and remote deployment.
 
 ---
 
@@ -35,7 +35,8 @@ The next development phase focuses on searchable meeting history and export work
 │               │ REST         │
 │               ▼              │
 │  ┌────────────────────────┐  │
-│  │ Meeting Notes / History│  │
+│  │ Meeting Workspace      │  │
+│  │ Titles, Notes, Search  │  │
 │  └────────────────────────┘  │
 └──────────────┬───────────────┘
                │
@@ -59,6 +60,12 @@ The next development phase focuses on searchable meeting history and export work
 │  │ Local LLM Cleanup      │  │
 │  │ / Structured Notes     │  │
 │  └────────────────────────┘  │
+│               │              │
+│               ▼              │
+│  ┌────────────────────────┐  │
+│  │ SQLite Meetings + FTS5 │  │
+│  │ REST CRUD and Search   │  │
+│  └────────────────────────┘  │
 └──────────────────────────────┘
 ```
 
@@ -72,6 +79,7 @@ The next development phase focuses on searchable meeting history and export work
 | Speech recognition           | Faster-Whisper                  |
 | AI note generation           | OpenAI-compatible local LLM API |
 | Local LLM runtime            | Ollama-compatible               |
+| Meeting persistence/search   | SQLite + FTS5                   |
 | Frontend testing             | Vitest + React Testing Library  |
 | Backend testing              | pytest                          |
 | Python dependency management | `uv`                            |
@@ -161,20 +169,13 @@ For example, if microphone initialization fails after screen capture has already
 
 Recorder failures also terminate the recording timer and send the existing WebSocket stop message exactly once.
 
-### 6. Local-first session storage
+### 6. Persistent meeting workspace and full-text search
 
-Saved meetings are currently persisted in browser storage.
+Saved meetings are persisted by the FastAPI backend in SQLite; the browser uses the meeting REST API as its source of truth. A selected meeting restores its editable title, raw and cleaned transcript, type, metadata, and user notes.
 
-The frontend handles:
+SQLite FTS5 indexes meeting titles (`filename`), cleaned transcripts, and notes. The frontend submits an explicit search request to `GET /api/meetings/search`, receives matching meeting records from the backend, and can open a result in the existing workspace. The browser does not filter the full meeting collection in memory.
 
-- Session creation
-- Session updates
-- Session deletion
-- Remount recovery
-- Malformed storage data
-- Incomplete/legacy session data
-
-Invalid persisted entries are normalized or discarded rather than being allowed to break the meeting history UI.
+The FTS index is an external-content index over the authoritative `meetings` table. SQLite triggers keep it synchronized when searchable fields are created, updated, or deleted.
 
 ### 7. Containerized development environment
 
@@ -204,9 +205,7 @@ The environment uses:
 
 ## Testing
 
-The frontend currently has **50 automated tests across 7 test files**. The backend has **10 deterministic pytest tests** for the live transcription handler.
-
-Testing focuses on the application's highest-risk state and resource boundaries rather than attempting to test every UI component independently.
+The frontend Vitest suite and backend pytest suite focus on the application's highest-risk state and resource boundaries rather than attempting to test every UI component independently.
 
 ### Current coverage includes
 
@@ -243,12 +242,11 @@ Testing focuses on the application's highest-risk state and resource boundaries 
 
 #### Session persistence
 
-- localStorage persistence
-- Session updates/deletion
-- Remount recovery
-- Malformed stored data
-- Incomplete/legacy sessions
-- Invalid session entries
+- Backend meeting API loading and failure recovery
+- Creation, partial updates, duplicate-source handling, and deletion
+- Editable meeting title and persisted notes
+- Meeting workspace restoration from persisted data
+- Backend/database-backed search requests, results, empty states, and failures
 
 #### AI cleanup
 
@@ -358,7 +356,7 @@ src/
 │   │   └── AI cleanup / note generation
 │   │
 │   ├── useMeetingSessions.ts
-│   │   └── Local meeting persistence
+│   │   └── Backend meeting CRUD and search
 │   │
 │   └── usePushToTalk.ts
 │       └── Keyboard recording control
@@ -380,6 +378,13 @@ src/
 - Word-level commit boundaries
 - Pause-aware commits
 
+#### Backend meeting persistence and search
+
+- SQLite schema and meeting CRUD API contracts
+- FTS5 search by title, cleaned transcript, and notes
+- Safe empty, no-match, and special-character queries
+- FTS synchronization after meeting updates and deletion
+
 ### Transcript editing
 
 - Fully editable committed transcript
@@ -396,10 +401,11 @@ src/
 
 ### Meeting management
 
-- Save meetings locally
-- Rename meetings
-- Edit saved transcripts
-- Restore sessions after reload
+- Persist meetings in SQLite through the FastAPI REST API
+- Rename meetings using the existing filename field
+- Edit saved transcripts and user notes
+- Restore a selected meeting workspace after reload
+- Search titles, cleaned transcripts, and notes through SQLite FTS5
 - Delete meetings
 
 ### Recording controls
@@ -417,12 +423,18 @@ src/
 
 ### REST API
 
-| Method | Path | Request | Success response | Important failures |
-| ------ | ---- | ------- | ---------------- | ------------------ |
-| `GET` | `/api/status` | None | `status`, `whisper_model`, `llm_model`, `llm_base_url` | `status` is `initializing` until the service exists. |
-| `GET` | `/api/system-prompt` | None | `{ "default_prompt": string }` | `503` when the service is not ready. |
-| `POST` | `/api/transcribe` | `multipart/form-data` with required `audio` file | `{ "success": true, "text": string }` | `503` if unready; `500` if file transcription fails. |
-| `POST` | `/api/clean` | JSON: required `text`; optional `system_prompt`; optional `meeting_type` (defaults to `general`) | `{ "success": true, "text": string }` | FastAPI validation errors for invalid JSON; `503` if unready; `502` if LLM cleanup fails. |
+| Method   | Path                             | Request                                                                                          | Success response                                                        | Important failures                                                                                                   |
+| -------- | -------------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/status`                    | None                                                                                             | `status`, `whisper_model`, `llm_model`, `llm_base_url`                  | `status` is `initializing` until the service exists.                                                                 |
+| `GET`    | `/api/system-prompt`             | None                                                                                             | `{ "default_prompt": string }`                                          | `503` when the service is not ready.                                                                                 |
+| `GET`    | `/api/meetings`                  | None                                                                                             | Array of persisted meeting records                                      | `503` when meeting storage is unavailable.                                                                           |
+| `GET`    | `/api/meetings/search?q=<query>` | URL query                                                                                        | Matching persisted meeting records; empty/whitespace query returns `[]` | `503` when meeting storage is unavailable. Search covers `filename`, `cleanedText`, and `notes` through SQLite FTS5. |
+| `POST`   | `/api/meetings`                  | JSON meeting record                                                                              | Created meeting record                                                  | `409` for duplicate ID/source key; `503` when storage is unavailable.                                                |
+| `GET`    | `/api/meetings/{id}`             | None                                                                                             | Persisted meeting record                                                | `404` if missing; `503` when storage is unavailable.                                                                 |
+| `PATCH`  | `/api/meetings/{id}`             | JSON with one or more changed meeting fields                                                     | Updated meeting record                                                  | `404` if missing; `409` for duplicate source key; `422` with no changes.                                             |
+| `DELETE` | `/api/meetings/{id}`             | None                                                                                             | `204 No Content`                                                        | `404` if missing; `503` when storage is unavailable.                                                                 |
+| `POST`   | `/api/transcribe`                | `multipart/form-data` with required `audio` file                                                 | `{ "success": true, "text": string }`                                   | `503` if unready; `500` if file transcription fails.                                                                 |
+| `POST`   | `/api/clean`                     | JSON: required `text`; optional `system_prompt`; optional `meeting_type` (defaults to `general`) | `{ "success": true, "text": string }`                                   | FastAPI validation errors for invalid JSON; `503` if unready; `502` if LLM cleanup fails.                            |
 
 ### Live transcription WebSocket
 
@@ -446,12 +458,12 @@ Malformed JSON, JSON values that are not objects, unknown control messages, and 
 
 Backend startup requires all four values below, even when the frontend disables LLM cleanup:
 
-| Variable | Purpose |
-| -------- | ------- |
-| `WHISPER_MODEL` | Faster-Whisper model name, for example `base.en`. |
-| `LLM_BASE_URL` | OpenAI-compatible LLM API base URL. |
-| `LLM_API_KEY` | API key passed to that client. Ollama ignores the example value. |
-| `LLM_MODEL` | LLM model name used for cleanup. |
+| Variable        | Purpose                                                          |
+| --------------- | ---------------------------------------------------------------- |
+| `WHISPER_MODEL` | Faster-Whisper model name, for example `base.en`.                |
+| `LLM_BASE_URL`  | OpenAI-compatible LLM API base URL.                              |
+| `LLM_API_KEY`   | API key passed to that client. Ollama ignores the example value. |
+| `LLM_MODEL`     | LLM model name used for cleanup.                                 |
 
 Copy `backend/.env.example` to `backend/.env` for the local development defaults. The backend tries the LLM connection at startup but logs a warning rather than failing if that check cannot connect.
 
@@ -582,9 +594,6 @@ The current priority order is:
 Testing / stabilization
         │
         ▼
-Searchable meeting history
-        │
-        ▼
 Export workflows
         │
         ▼
@@ -618,21 +627,32 @@ The goal is to establish reliable application behavior and a maintainable archit
 - [x] Containerized development environment
 - [x] Backend transcription, pause-detection, and WebSocket lifecycle tests
 
-### Phase 2 — Meeting productivity
+### Phase 2 — Backend delivery
 
-- [ ] Searchable meeting history
-- [ ] Meeting metadata and filtering
+- [x] Containerized FastAPI runtime image
+- [x] Persisted model cache and meeting database volumes
+- [x] Reproducible Dev Container validation environment
+
+### Phase 3 — Persistent meeting workspace
+
+- [x] SQLite meeting persistence and REST CRUD API
+- [x] Persistent workspace with editable titles, notes, transcripts, and metadata
+- [x] Backend/database-backed full-text meeting search
+- [x] Search by title, cleaned transcript, and notes through SQLite FTS5
+
+### Phase 4 — Meeting productivity
+
 - [ ] Export to Markdown
 - [ ] Export to PDF
-- [ ] Improved meeting organization
+- [ ] Additional meeting metadata and filtering
 
-### Phase 3 — Desktop application
+### Phase 5 — Desktop application
 
 - [ ] Package frontend as a Windows application with Electron
 - [ ] Integrate local backend/runtime
 - [ ] Desktop-specific recording and lifecycle handling
 
-### Phase 4 — Remote deployment
+### Phase 6 — Remote deployment
 
 - [ ] Deploy backend remotely
 - [ ] Convert frontend into a PWA
@@ -640,13 +660,13 @@ The goal is to establish reliable application behavior and a maintainable archit
 - [ ] Authentication and secure transport
 - [ ] Production monitoring/error handling
 
-### Phase 5 — Advanced transcription
+### Phase 7 — Advanced transcription
 
 - [ ] Speaker diarization
 - [ ] Speaker-aware transcripts
 - [ ] Improved transcript segmentation
 
-### Phase 6 — Mobile
+### Phase 8 — Mobile
 
 - [ ] Package application for iOS with Capacitor
 - [ ] Adapt audio capture to mobile constraints
@@ -663,7 +683,7 @@ Important design goals include:
 - **Bounded processing:** avoid algorithms whose cost grows excessively with meeting length.
 - **Explicit state boundaries:** separate provisional recognition state from user-owned editable state.
 - **Failure-safe resource ownership:** clean up partially initialized audio resources.
-- **Deterministic persistence:** recover gracefully from malformed or incomplete local data.
+- **Deterministic persistence:** treat SQLite and the meeting REST API as the source of truth, with synchronized full-text indexing.
 - **Test high-risk behavior:** prioritize state transitions, asynchronous boundaries, and resource lifecycles.
 - **Reproducible development:** use a containerized environment with isolated platform-specific dependencies.
 - **Incremental architecture:** stabilize core behavior before adding deployment targets and advanced features.

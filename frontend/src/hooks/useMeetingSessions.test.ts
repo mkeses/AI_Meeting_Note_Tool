@@ -100,6 +100,64 @@ describe('useMeetingSessions', () => {
     );
   });
 
+  it('searches meetings through the backend API instead of filtering saved state', async () => {
+    const loadedSession = createSession({
+      id: 'loaded-session',
+      filename: 'Unrelated meeting',
+    });
+    const searchResult = createSession({
+      id: 'search-result',
+      sourceKey: 'text:search-result',
+      filename: 'Architecture review',
+      sourceType: 'text',
+    });
+    fetchMock.mockResolvedValueOnce(jsonResponse([loadedSession]));
+    fetchMock.mockResolvedValueOnce(jsonResponse([searchResult]));
+
+    const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let foundSessions: Awaited<
+      ReturnType<typeof result.current.searchSessions>
+    > = null;
+    await act(async () => {
+      foundSessions = await result.current.searchSessions(' architecture ');
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/meetings/search?q=architecture',
+      undefined
+    );
+    expect(foundSessions).toEqual([searchResult]);
+    expect(result.current.savedSessions).toEqual([loadedSession]);
+  });
+
+  it('avoids a search request for an empty query and reports search failures', async () => {
+    const session = createSession();
+    fetchMock.mockResolvedValueOnce(jsonResponse([session]));
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ detail: 'Unavailable' }, 503)
+    );
+
+    const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      expect(await result.current.searchSessions('   ')).toEqual([]);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      expect(await result.current.searchSessions('meeting')).toBeNull();
+    });
+
+    expect(result.current.error).toBe(
+      'Failed to search meetings: Request failed with status 503'
+    );
+    expect(result.current.savedSessions).toEqual([session]);
+  });
+
   it('creates a meeting from the server response with the client ID, sourceKey, and sourceType', async () => {
     const newSession = createNewSession({
       id: 'client-created-id',
@@ -204,6 +262,141 @@ describe('useMeetingSessions', () => {
     ]);
   });
 
+  it('patches a changed meeting title through the filename field only', async () => {
+    const session = createSession({ id: 'title-1' });
+    const updatedSession = createSession({
+      ...session,
+      filename: 'Renamed meeting',
+      updatedAt: '2026-09-01T12:05:00.000Z',
+    });
+    fetchMock.mockResolvedValueOnce(jsonResponse([session]));
+    fetchMock.mockResolvedValueOnce(jsonResponse(updatedSession));
+
+    const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.saveSession(
+        session.id,
+        ' Renamed meeting ',
+        session.rawText,
+        session.cleanedText,
+        session.meetingType
+      );
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/meetings/title-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: 'Renamed meeting' }),
+    });
+    expect(result.current.savedSessions).toEqual([updatedSession]);
+  });
+
+  it('preserves current notes when a non-note save returns stale notes', async () => {
+    const session = createSession({
+      id: 'notes-1',
+      notes: 'Keep this current note.',
+    });
+    const updatedSession = createSession({
+      ...session,
+      filename: 'Renamed meeting',
+      notes: 'Stale server note.',
+      updatedAt: '2026-09-01T12:05:00.000Z',
+    });
+    fetchMock.mockResolvedValueOnce(jsonResponse([session]));
+    fetchMock.mockResolvedValueOnce(jsonResponse(updatedSession));
+
+    const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.saveSession(
+        session.id,
+        updatedSession.filename,
+        session.rawText,
+        session.cleanedText,
+        session.meetingType
+      );
+    });
+
+    expect(result.current.savedSessions).toEqual([
+      { ...updatedSession, notes: session.notes },
+    ]);
+  });
+
+  it('patches notes without changing transcript or meeting fields', async () => {
+    const session = createSession({ id: 'notes-1' });
+    const updatedSession = createSession({
+      ...session,
+      notes: 'Confirm the rollout date.',
+      updatedAt: '2026-09-01T12:05:00.000Z',
+    });
+    fetchMock.mockResolvedValueOnce(jsonResponse([session]));
+    fetchMock.mockResolvedValueOnce(jsonResponse(updatedSession));
+
+    const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let savedSession: Awaited<ReturnType<typeof result.current.saveNotes>> =
+      null;
+    await act(async () => {
+      savedSession = await result.current.saveNotes(
+        session.id,
+        updatedSession.notes
+      );
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/meetings/notes-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: 'Confirm the rollout date.' }),
+    });
+    expect(savedSession).toEqual(updatedSession);
+    expect(result.current.savedSessions).toEqual([updatedSession]);
+  });
+
+  it('keeps the newest notes when an older save response arrives later', async () => {
+    const session = createSession({ id: 'notes-1', notes: 'Original notes.' });
+    const olderResponse = createDeferred<Response>();
+    const newerResponse = createDeferred<Response>();
+    const newestSession = createSession({
+      ...session,
+      notes: 'Newest notes.',
+      updatedAt: '2026-09-01T12:06:00.000Z',
+    });
+    const staleSession = createSession({
+      ...session,
+      notes: 'Older notes.',
+      updatedAt: '2026-09-01T12:05:00.000Z',
+    });
+    fetchMock.mockResolvedValueOnce(jsonResponse([session]));
+    fetchMock.mockReturnValueOnce(olderResponse.promise);
+    fetchMock.mockReturnValueOnce(newerResponse.promise);
+
+    const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let firstSave: ReturnType<typeof result.current.saveNotes>;
+    let secondSave: ReturnType<typeof result.current.saveNotes>;
+    act(() => {
+      firstSave = result.current.saveNotes(session.id, staleSession.notes);
+      secondSave = result.current.saveNotes(session.id, newestSession.notes);
+    });
+
+    await act(async () => {
+      newerResponse.resolve(jsonResponse(newestSession));
+      await secondSave;
+    });
+    expect(result.current.savedSessions).toEqual([newestSession]);
+
+    await act(async () => {
+      olderResponse.resolve(jsonResponse(staleSession));
+      await firstSave;
+    });
+    expect(result.current.savedSessions).toEqual([newestSession]);
+  });
+
   it('preserves the previous meeting state when PATCH fails', async () => {
     const session = createSession({ id: 'update-1' });
     fetchMock.mockResolvedValueOnce(jsonResponse([session]));
@@ -227,6 +420,26 @@ describe('useMeetingSessions', () => {
     expect(result.current.savedSessions).toEqual([session]);
     expect(result.current.error).toBe(
       'Failed to save meeting: Request failed with status 503'
+    );
+  });
+
+  it('preserves the previous meeting state when a notes PATCH fails', async () => {
+    const session = createSession({ id: 'notes-1' });
+    fetchMock.mockResolvedValueOnce(jsonResponse([session]));
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ detail: 'Unavailable' }, 503)
+    );
+
+    const { result } = renderHook(() => useMeetingSessions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.saveNotes(session.id, 'Keep this local edit.');
+    });
+
+    expect(result.current.savedSessions).toEqual([session]);
+    expect(result.current.error).toBe(
+      'Failed to save notes: Request failed with status 503'
     );
   });
 

@@ -183,3 +183,110 @@ def test_duplicate_ids_and_malformed_payloads_are_rejected(
     assert duplicate_response.status_code == 409
     assert invalid_response.status_code == 422
     assert empty_update_response.status_code == 422
+
+
+def test_search_meetings_matches_titles_cleaned_transcripts_and_notes(
+    api_client: TestClient,
+) -> None:
+    title_meeting = api_client.post(
+        "/api/meetings",
+        json=meeting_payload(
+            filename="Architecture review",
+            cleanedText="Discussed the storage boundary.",
+            notes="Confirm the migration plan.",
+        ),
+    ).json()
+    transcript_meeting = api_client.post(
+        "/api/meetings",
+        json=meeting_payload(
+            id="meeting-2",
+            sourceKey="text:source-2",
+            filename="Weekly sync",
+            cleanedText="The release train needs a rollback plan.",
+            sourceType="text",
+            notes="Coordinate with the release team.",
+        ),
+    ).json()
+    notes_meeting = api_client.post(
+        "/api/meetings",
+        json=meeting_payload(
+            id="meeting-3",
+            sourceKey="text:source-3",
+            filename="Design follow-up",
+            cleanedText="Reviewed the test strategy.",
+            sourceType="text",
+            notes="Schedule a security review.",
+        ),
+    ).json()
+
+    title_results = api_client.get("/api/meetings/search", params={"q": "architecture"})
+    transcript_results = api_client.get(
+        "/api/meetings/search", params={"q": "rollback"}
+    )
+    notes_results = api_client.get("/api/meetings/search", params={"q": "security"})
+    multiple_results = api_client.get("/api/meetings/search", params={"q": "review"})
+
+    assert title_results.status_code == 200
+    assert title_results.json() == [title_meeting]
+    assert transcript_results.json() == [transcript_meeting]
+    assert notes_results.json() == [notes_meeting]
+    assert {meeting["id"] for meeting in multiple_results.json()} == {
+        title_meeting["id"],
+        notes_meeting["id"],
+    }
+
+
+def test_search_meetings_handles_empty_no_match_and_special_queries(
+    api_client: TestClient,
+) -> None:
+    api_client.post("/api/meetings", json=meeting_payload())
+
+    empty_results = api_client.get("/api/meetings/search", params={"q": "  "})
+    no_results = api_client.get("/api/meetings/search", params={"q": "not-present"})
+    special_results = api_client.get("/api/meetings/search", params={"q": '***" OR'})
+
+    assert empty_results.status_code == 200
+    assert empty_results.json() == []
+    assert no_results.status_code == 200
+    assert no_results.json() == []
+    assert special_results.status_code == 200
+    assert special_results.json() == []
+
+
+def test_search_index_tracks_meeting_updates_and_deletions(
+    api_client: TestClient,
+) -> None:
+    created = api_client.post(
+        "/api/meetings",
+        json=meeting_payload(
+            filename="Legacy planning",
+            cleanedText="The obsolete release checklist is ready.",
+            notes="Archive the old design notes.",
+        ),
+    ).json()
+
+    assert api_client.get("/api/meetings/search", params={"q": "legacy"}).json() == [
+        created
+    ]
+
+    updated_response = api_client.patch(
+        "/api/meetings/meeting-1",
+        json={
+            "filename": "Current planning",
+            "cleanedText": "The current rollout checklist is ready.",
+            "notes": "Share the current design notes.",
+        },
+    )
+
+    assert updated_response.status_code == 200
+    updated = updated_response.json()
+    assert api_client.get("/api/meetings/search", params={"q": "legacy"}).json() == []
+    assert api_client.get("/api/meetings/search", params={"q": "rollout"}).json() == [
+        updated
+    ]
+    assert api_client.get("/api/meetings/search", params={"q": "share"}).json() == [
+        updated
+    ]
+
+    assert api_client.delete("/api/meetings/meeting-1").status_code == 204
+    assert api_client.get("/api/meetings/search", params={"q": "current"}).json() == []

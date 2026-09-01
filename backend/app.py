@@ -14,6 +14,7 @@ from fastapi import (
     FastAPI,
     File,
     HTTPException,
+    Query,
     Response,
     UploadFile,
     WebSocket,
@@ -179,6 +180,21 @@ def create_meeting(meeting: MeetingCreate) -> MeetingResponse:
         raise_storage_http_error(error)
 
     return MeetingResponse.from_record(created_meeting)
+
+
+@app.get("/api/meetings/search", response_model=list[MeetingResponse])
+def search_meetings(
+    q: str = Query(default="", max_length=256)
+) -> list[MeetingResponse]:
+    if not q.strip():
+        return []
+
+    try:
+        meetings = get_meeting_repository().search(q)
+    except MeetingStorageError as error:
+        raise_storage_http_error(error)
+
+    return [MeetingResponse.from_record(meeting) for meeting in meetings]
 
 
 @app.get("/api/meetings/{meeting_id}", response_model=MeetingResponse)
