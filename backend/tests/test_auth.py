@@ -145,6 +145,7 @@ def remote_client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AUTH_ENABLED", "1")
     monkeypatch.setenv("AUTH_SESSION_SECRET", "s" * 32)
     monkeypatch.setenv("AUTH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("REMOTE_CORS_ORIGINS", "https://app.example.test")
     monkeypatch.setattr(backend_app, "TranscriptionService", StubTranscriptionService)
     monkeypatch.setattr(backend_app, "create_meeting_store", lambda _settings: store)
 
@@ -272,3 +273,98 @@ def test_remote_meeting_creation_uses_a_server_timestamp(remote_client) -> None:
 
     assert created.status_code == 201
     assert created.json()["createdAt"] != "2000-01-01T00:00:00+00:00"
+
+
+REMOTE_WEBSOCKET_HEADERS = {"origin": "https://app.example.test"}
+
+
+def test_remote_websocket_requires_a_valid_session(remote_client) -> None:
+    client, store = remote_client
+
+    with (
+        pytest.raises(backend_app.WebSocketDisconnect) as exception,
+        client.websocket_connect("/ws/transcribe", headers=REMOTE_WEBSOCKET_HEADERS),
+    ):
+        pass
+
+    assert exception.value.code == backend_app.WEBSOCKET_UNAUTHORIZED_CLOSE_CODE
+
+    client.cookies.set("ai_meeting_session", "invalid")
+
+    with (
+        pytest.raises(backend_app.WebSocketDisconnect) as exception,
+        client.websocket_connect("/ws/transcribe", headers=REMOTE_WEBSOCKET_HEADERS),
+    ):
+        pass
+
+    assert exception.value.code == backend_app.WEBSOCKET_UNAUTHORIZED_CLOSE_CODE
+
+    register(client, "alice")
+    expired_token = create_session_token()
+    store.create_session(
+        store.users_by_login["alice"][0].id,
+        hash_session_token(expired_token, "s" * 32),
+        utc_now() - timedelta(seconds=1),
+    )
+    client.cookies.set("ai_meeting_session", expired_token)
+
+    with (
+        pytest.raises(backend_app.WebSocketDisconnect) as exception,
+        client.websocket_connect("/ws/transcribe", headers=REMOTE_WEBSOCKET_HEADERS),
+    ):
+        pass
+
+    assert exception.value.code == backend_app.WEBSOCKET_UNAUTHORIZED_CLOSE_CODE
+
+
+def test_remote_websocket_rejects_an_unconfigured_origin(remote_client) -> None:
+    client, _store = remote_client
+    register(client, "alice")
+    login(client, "alice")
+
+    with (
+        pytest.raises(backend_app.WebSocketDisconnect) as exception,
+        client.websocket_connect(
+            "/ws/transcribe", headers={"origin": "https://untrusted.example"}
+        ),
+    ):
+        pass
+
+    assert exception.value.code == backend_app.WEBSOCKET_FORBIDDEN_ORIGIN_CLOSE_CODE
+
+
+def test_authenticated_remote_websocket_uses_the_session_not_client_identity(
+    remote_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _store = remote_client
+    register(client, "alice")
+    login(client, "alice")
+
+    async def transcribe_final(_audio_chunks: list[bytes]) -> str:
+        return "remote transcript"
+
+    monkeypatch.setattr(backend_app, "transcribe_chunks", transcribe_final)
+
+    with client.websocket_connect(
+        "/ws/transcribe", headers=REMOTE_WEBSOCKET_HEADERS
+    ) as websocket:
+        websocket.send_json(
+            {
+                "type": "start",
+                "ownerId": "another-user",
+                "userId": "another-user",
+            }
+        )
+        assert websocket.receive_json() == {
+            "type": "ready",
+            "message": "Live transcription is ready",
+        }
+        websocket.send_bytes(b"audio")
+        websocket.send_json({"type": "stop"})
+        assert websocket.receive_json() == {
+            "type": "final",
+            "text": "remote transcript",
+            "committed_text": "remote transcript",
+            "partial_text": "",
+        }

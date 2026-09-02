@@ -444,6 +444,15 @@ src/
 
 Connect to `/ws/transcribe`. The server accepts the connection, then sends `ready` after a client `start` control message. The browser currently sends `sample_rate: 48000`, `channels: 1`, `include_microphone`, and `language` alongside `type: "start"`; the backend recognizes `type` and does not validate those extra fields.
 
+Local SQLite/browser/Electron mode remains auth-free. In remote PostgreSQL mode
+(`AUTH_ENABLED=1`), the handshake requires the existing valid session cookie
+and an `Origin` listed in `REMOTE_CORS_ORIGINS`; rejected handshakes close with
+`4401` for authentication and `4403` for origin failures. The socket uses the
+configured `VITE_BACKEND_URL` to derive `ws://` or `wss://`; no separate remote
+WebSocket URL is required. Control frames are limited to 16 KiB, individual
+audio frames to 1 MiB, and authenticated remote connections to 256 MiB of
+buffered audio. These limits do not change the normal 16,000-byte PCM chunks.
+
 Client messages:
 
 - JSON `{ "type": "start" }` starts or resets one live session.

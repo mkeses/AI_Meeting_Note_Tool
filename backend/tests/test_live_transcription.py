@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Sequence
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -89,6 +90,11 @@ def transcript_messages(websocket: FakeWebSocket) -> list[dict[str, object]]:
 def configured_service(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep tests at the handler boundary without loading local AI models."""
     monkeypatch.setattr(backend_app, "service", object())
+    monkeypatch.setattr(
+        backend_app,
+        "application_settings",
+        SimpleNamespace(auth_enabled=False),
+    )
 
 
 def test_chunk_has_speech_uses_pcm_rms_threshold() -> None:
@@ -147,6 +153,20 @@ def test_live_transcription_emits_provisional_text_then_final_result(
         },
     ]
     assert websocket.closed == (1000, "Final transcript sent")
+
+
+def test_oversized_audio_frame_is_closed_without_transcription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backend_app, "MAX_WEBSOCKET_AUDIO_CHUNK_BYTES", 4)
+
+    websocket = run_websocket([start_message(), audio_message(b"oversized")])
+
+    assert websocket.accepted
+    assert websocket.closed == (1009, "WebSocket message too large")
+    assert websocket.sent_messages == [
+        {"type": "ready", "message": "Live transcription is ready"}
+    ]
 
 
 def test_pause_commits_only_new_words_from_an_overlapping_window(

@@ -103,6 +103,14 @@ MAX_PARTIAL_BYTES = int(MAX_PARTIAL_SECONDS * BYTES_PER_SECOND)
 
 LIVE_TRIGGER_BYTES = 160_000
 
+MAX_WEBSOCKET_CONTROL_MESSAGE_BYTES = 16 * 1024
+MAX_WEBSOCKET_AUDIO_CHUNK_BYTES = 1024 * 1024
+MAX_REMOTE_LIVE_AUDIO_BYTES = 256 * 1024 * 1024
+
+WEBSOCKET_UNAUTHORIZED_CLOSE_CODE = 4401
+WEBSOCKET_FORBIDDEN_ORIGIN_CLOSE_CODE = 4403
+WEBSOCKET_SERVICE_UNAVAILABLE_CLOSE_CODE = 1013
+
 PAUSE_FLUSH_CHUNKS = 4
 
 MIN_COMMIT_SECONDS = 0.8
@@ -526,8 +534,6 @@ async def transcribe_chunks(audio_chunks: list[bytes]) -> str:
             f"Detected language: {info.language} "
             f"(p={info.language_probability:.2f})"
         )
-        print(f"Raw: {text!r}")
-
         return text
 
     return await asyncio.to_thread(transcribe_pcm)
@@ -645,8 +651,61 @@ def join_non_empty(*parts: str) -> str:
     return " ".join(part.strip() for part in parts if part.strip()).strip()
 
 
+async def get_remote_websocket_user(
+    websocket: WebSocket,
+    settings: Settings,
+) -> User | None:
+    """Authenticate a remote WebSocket through the existing session store."""
+    origin = websocket.headers.get("origin")
+    if origin not in get_allowed_cors_origins():
+        await websocket.close(
+            code=WEBSOCKET_FORBIDDEN_ORIGIN_CLOSE_CODE,
+            reason="Origin not allowed",
+        )
+        return None
+
+    token = websocket.cookies.get(settings.auth_cookie_name)
+    if not token or not settings.auth_session_secret:
+        await websocket.close(
+            code=WEBSOCKET_UNAUTHORIZED_CLOSE_CODE,
+            reason="Authentication required",
+        )
+        return None
+
+    try:
+        user = get_authentication_store().get_user_by_session(
+            hash_session_token(token, settings.auth_session_secret), utc_now()
+        )
+    except AuthenticationStorageError:
+        await websocket.close(
+            code=WEBSOCKET_SERVICE_UNAVAILABLE_CLOSE_CODE,
+            reason="Authentication unavailable",
+        )
+        return None
+
+    if user is None:
+        await websocket.close(
+            code=WEBSOCKET_UNAUTHORIZED_CLOSE_CODE,
+            reason="Authentication required",
+        )
+    return user
+
+
 @app.websocket("/ws/transcribe")
 async def transcribe_websocket(websocket: WebSocket):
+    settings = application_settings
+    if settings is None:
+        await websocket.close(
+            code=WEBSOCKET_SERVICE_UNAVAILABLE_CLOSE_CODE,
+            reason="Service unavailable",
+        )
+        return
+
+    if settings.auth_enabled:
+        _authenticated_user = await get_remote_websocket_user(websocket, settings)
+        if _authenticated_user is None:
+            return
+
     await websocket.accept()
 
     audio_chunks: list[bytes] = []
@@ -739,17 +798,6 @@ async def transcribe_websocket(websocket: WebSocket):
                 next_committed_audio_bytes = current_committed_audio_bytes
                 partial_text = new_text
 
-            print(
-                "BACKEND OUTPUT",
-                {
-                    "committed_text": next_committed_text,
-                    "partial_text": partial_text,
-                    "new_word_count": len(new_words),
-                    "force_commit": force_commit,
-                    "max_partial_forced": (should_force_commit and not force_commit),
-                },
-            )
-
             await websocket.send_json(
                 {
                     "type": "transcript",
@@ -764,8 +812,8 @@ async def transcribe_websocket(websocket: WebSocket):
         except WebSocketDisconnect:
             raise
 
-        except Exception as error:
-            print(f"Live transcription failed: {error}")
+        except Exception:
+            print("Live transcription failed")
             return current_committed_text, current_committed_audio_bytes
 
     async def finish_live_task() -> None:
@@ -783,8 +831,8 @@ async def transcribe_websocket(websocket: WebSocket):
             committed_text, committed_audio_bytes = live_transcription_task.result()
         except asyncio.CancelledError:
             pass
-        except Exception as error:
-            print(f"Live transcription task failed: {error}")
+        except Exception:
+            print("Live transcription task failed")
         finally:
             live_transcription_task = None
 
@@ -826,7 +874,11 @@ async def transcribe_websocket(websocket: WebSocket):
             audio_data = message.get("bytes")
 
             if text_data is not None:
-                print(f"WebSocket message: {text_data}")
+                if len(text_data.encode("utf-8")) > MAX_WEBSOCKET_CONTROL_MESSAGE_BYTES:
+                    await websocket.close(
+                        code=1009, reason="WebSocket message too large"
+                    )
+                    return
 
                 try:
                     payload = json.loads(text_data)
@@ -869,7 +921,21 @@ async def transcribe_websocket(websocket: WebSocket):
                     print("Stop received; transcribing buffered audio")
                     break
 
+            elif (
+                audio_data is not None
+                and len(audio_data) > MAX_WEBSOCKET_AUDIO_CHUNK_BYTES
+            ):
+                await websocket.close(code=1009, reason="WebSocket message too large")
+                return
+
             elif audio_data is not None and started:
+                if (
+                    settings.auth_enabled
+                    and total_bytes + len(audio_data) > MAX_REMOTE_LIVE_AUDIO_BYTES
+                ):
+                    await websocket.close(code=1009, reason="Live audio limit reached")
+                    return
+
                 audio_chunks.append(audio_data)
                 total_bytes += len(audio_data)
 
@@ -924,8 +990,8 @@ async def transcribe_websocket(websocket: WebSocket):
         print("Live transcription client disconnected")
         return
 
-    except Exception as error:
-        print(f"Live transcription connection closed: {error}")
+    except Exception:
+        print("Live transcription connection closed")
 
     finally:
         if live_transcription_task is not None:
@@ -947,13 +1013,9 @@ async def transcribe_websocket(websocket: WebSocket):
 
     result = await transcribe_chunks(audio_chunks)
 
-    print(f"Transcription function returned: {result!r}")
-
     if not result:
         print("Transcription result was empty; nothing sent to frontend")
         return
-
-    print(f"Sending final transcript to frontend: {result}")
 
     try:
         await websocket.send_json(
@@ -977,5 +1039,5 @@ async def transcribe_websocket(websocket: WebSocket):
     except WebSocketDisconnect:
         print("Client disconnected before final transcript was sent")
 
-    except Exception as error:
-        print(f"Could not send final transcript or close WebSocket: {error}")
+    except Exception:
+        print("Could not send final transcript or close WebSocket")
