@@ -23,6 +23,9 @@ dev = [
     "black>=24.0.0",
     "pytest>=8.0.0",
 ]
+packaging = [
+    "pyinstaller>=6.0,<7.0",
+]
 
 
 [tool.black]
