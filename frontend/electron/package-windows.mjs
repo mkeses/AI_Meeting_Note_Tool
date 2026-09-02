@@ -1,5 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { packager } from '@electron/packager';
 import {
   FRONTEND_DIRECTORY,
@@ -8,8 +10,16 @@ import {
   stageWindowsBackend,
   validateWindowsBackendArtifact,
 } from './windows-backend-stage.mjs';
+import {
+  WINDOWS_INSTALLER_SETUP_EXECUTABLE_NAME,
+  createWindowsInstallerArtifact,
+  resolveWindowsInstallerOutputDirectory,
+} from './windows-installer.mjs';
 
-const PACKAGE_NAME = 'AI Meeting Note Tool';
+const require = createRequire(import.meta.url);
+const { createWindowsInstaller } = require('electron-winstaller');
+
+export const PACKAGE_NAME = 'AI Meeting Note Tool';
 const OUTPUT_DIRECTORY = path.join(
   REPOSITORY_DIRECTORY,
   'dist',
@@ -24,13 +34,16 @@ function requireWindowsX64() {
   }
 }
 
-async function packageWindowsApplication() {
+export async function packageWindowsApplication({
+  packagerImpl = packager,
+  createInstaller = createWindowsInstaller,
+} = {}) {
   requireWindowsX64();
 
   const sourceDirectory = resolveWindowsBackendSourceDirectory();
   validateWindowsBackendArtifact({ sourceDirectory });
 
-  const applicationDirectories = await packager({
+  const applicationDirectories = await packagerImpl({
     dir: FRONTEND_DIRECTORY,
     out: OUTPUT_DIRECTORY,
     name: PACKAGE_NAME,
@@ -48,12 +61,32 @@ async function packageWindowsApplication() {
     });
   }
 
+  const installerOutputDirectory = resolveWindowsInstallerOutputDirectory();
+
+  for (const applicationDirectory of applicationDirectories) {
+    await createWindowsInstallerArtifact({
+      applicationDirectory,
+      applicationName: PACKAGE_NAME,
+      createInstaller,
+      outputDirectory: installerOutputDirectory,
+    });
+  }
+
   for (const applicationDirectory of applicationDirectories) {
     console.log(`Packaged Windows desktop app: ${applicationDirectory}`);
   }
+
+  console.log(
+    `Windows installer: ${path.join(
+      installerOutputDirectory,
+      WINDOWS_INSTALLER_SETUP_EXECUTABLE_NAME
+    )}`
+  );
 }
 
-packageWindowsApplication().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+if (path.resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
+  packageWindowsApplication().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

@@ -26,8 +26,17 @@ import {
   resolveDesktopResourcePaths,
 } from './desktop-runtime.mjs';
 import { configureDesktopMediaCapture } from './desktop-media.mjs';
+import { handleWindowsSquirrelEvent } from './windows-squirrel.mjs';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
+const isHandlingSquirrelEvent = handleWindowsSquirrelEvent({
+  platform: process.platform,
+  argv: process.argv,
+  execPath: process.execPath,
+  spawnProcess: spawn,
+  quit: () => app.quit(),
+});
+
 protocol.registerSchemesAsPrivileged([
   {
     scheme: DESKTOP_RENDERER_SCHEME,
@@ -40,17 +49,20 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-app.setName('AI Meeting Note Tool');
+let desktopRuntime = null;
 
-const desktopRuntime = initializeDesktopRuntime({
-  platform: process.platform,
-  localAppData: process.env.LOCALAPPDATA,
-  userDataPath: app.getPath('userData'),
-});
+if (!isHandlingSquirrelEvent) {
+  app.setName('AI Meeting Note Tool');
+  desktopRuntime = initializeDesktopRuntime({
+    platform: process.platform,
+    localAppData: process.env.LOCALAPPDATA,
+    userDataPath: app.getPath('userData'),
+  });
 
-app.setPath('userData', desktopRuntime.paths.electronUserDataDirectory);
-app.setPath('sessionData', desktopRuntime.paths.electronSessionDataDirectory);
-app.setAppLogsPath(desktopRuntime.paths.logsDirectory);
+  app.setPath('userData', desktopRuntime.paths.electronUserDataDirectory);
+  app.setPath('sessionData', desktopRuntime.paths.electronSessionDataDirectory);
+  app.setAppLogsPath(desktopRuntime.paths.logsDirectory);
+}
 
 const developmentRendererUrl =
   process.env.ELECTRON_RENDERER_URL ?? 'http://localhost:3000';
@@ -170,6 +182,10 @@ async function startDesktopApplication() {
 }
 
 app.whenReady().then(async () => {
+  if (isHandlingSquirrelEvent) {
+    return;
+  }
+
   try {
     configureDesktopMediaCapture({
       session: session.defaultSession,
