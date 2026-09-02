@@ -1,7 +1,6 @@
-from types import SimpleNamespace
-
 import pytest
 
+from llm import OpenAICompatibleMeetingIntelligence
 from transcription import (
     MEETING_NOTES_MAX_TOKENS,
     SYSTEM_PROMPT,
@@ -60,32 +59,39 @@ POLICY_ADDENDUM_DISCUSSION = (
 )
 
 
-class FakeCompletions:
+class FakeMeetingIntelligence:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def create(self, **kwargs: object) -> SimpleNamespace:
-        self.calls.append(kwargs)
-        return SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="## Meeting Overview\nNotes")
-                )
-            ]
+    def clean(
+        self,
+        text: str,
+        system_prompt: str | None = None,
+        meeting_type: str = "general",
+    ) -> str:
+        self.calls.append(
+            {
+                "model": "test-ollama-model",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": OpenAICompatibleMeetingIntelligence.build_prompt(
+                            system_prompt or SYSTEM_PROMPT, meeting_type
+                        ),
+                    },
+                    {"role": "user", "content": f"Transcript:\n{text}"},
+                ],
+                "temperature": 0.2,
+                "max_tokens": MEETING_NOTES_MAX_TOKENS,
+            }
         )
-
-
-class FakeLlmClient:
-    def __init__(self) -> None:
-        self.completions = FakeCompletions()
-        self.chat = SimpleNamespace(completions=self.completions)
+        return "## Meeting Overview\nNotes"
 
 
 @pytest.fixture
 def service() -> TranscriptionService:
     service = object.__new__(TranscriptionService)
-    service.llm_client = FakeLlmClient()
-    service.llm_model = "test-ollama-model"
+    service.llm_provider = FakeMeetingIntelligence()
     return service
 
 
@@ -132,7 +138,7 @@ def test_unfinished_policy_addendum_discussion_cannot_be_reported_as_a_decision(
 
     service.clean_with_llm(POLICY_ADDENDUM_DISCUSSION, meeting_type="general")
 
-    call = service.llm_client.completions.calls[-1]
+    call = service.llm_provider.calls[-1]
     assert call["messages"][-1] == {
         "role": "user",
         "content": f"Transcript:\n{POLICY_ADDENDUM_DISCUSSION}",
@@ -190,7 +196,7 @@ def test_clean_with_llm_uses_the_shared_contract_for_representative_meetings(
 
     assert cleaned == "## Meeting Overview\nNotes"
 
-    call = service.llm_client.completions.calls[-1]
+    call = service.llm_provider.calls[-1]
     assert call["model"] == "test-ollama-model"
     assert call["temperature"] == 0.2
     assert call["max_tokens"] == MEETING_NOTES_MAX_TOKENS == 1200
@@ -214,7 +220,7 @@ def test_clean_with_llm_keeps_custom_prompt_support(
         meeting_type="standup",
     )
 
-    system_message = service.llm_client.completions.calls[-1]["messages"][0]
+    system_message = service.llm_provider.calls[-1]["messages"][0]
     assert system_message == {
         "role": "system",
         "content": service.build_meeting_prompt(custom_prompt, "standup"),

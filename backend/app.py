@@ -26,6 +26,8 @@ from scipy.signal import resample_poly
 
 from database import MeetingConflictError, MeetingRepository, MeetingStorageError
 from meeting_models import MeetingCreate, MeetingResponse, MeetingUpdate
+from settings import Settings
+from storage import MeetingStore
 from transcription import TranscriptionService
 
 load_dotenv()
@@ -60,7 +62,7 @@ Segment = dict[str, float | str]
 Word = dict[str, float | str]
 
 service: TranscriptionService | None = None
-meeting_repository: MeetingRepository | None = None
+meeting_repository: MeetingStore | None = None
 
 # --- Live transcription windowing constants ---
 
@@ -102,34 +104,15 @@ async def lifespan(app: FastAPI):
 
     print("Starting AI Transcript App...")
 
-    whisper_model = os.getenv("WHISPER_MODEL")
-    llm_base_url = os.getenv("LLM_BASE_URL")
-    llm_api_key = os.getenv("LLM_API_KEY")
-    llm_model = os.getenv("LLM_MODEL")
-
-    missing_values = [
-        name
-        for name, value in {
-            "WHISPER_MODEL": whisper_model,
-            "LLM_BASE_URL": llm_base_url,
-            "LLM_API_KEY": llm_api_key,
-            "LLM_MODEL": llm_model,
-        }.items()
-        if not value
-    ]
-
-    if missing_values:
-        raise RuntimeError(
-            "Missing required environment variables: " + ", ".join(missing_values)
-        )
+    settings = Settings.from_environment()
 
     service = TranscriptionService(
-        whisper_model=whisper_model,
-        llm_base_url=llm_base_url,
-        llm_api_key=llm_api_key,
-        llm_model=llm_model,
+        whisper_model=settings.whisper_model,
+        llm_base_url=settings.llm_base_url,
+        llm_api_key=settings.llm_api_key,
+        llm_model=settings.llm_model,
     )
-    meeting_repository = MeetingRepository.from_environment()
+    meeting_repository = MeetingRepository(settings.database_path)
     meeting_repository.initialize()
 
     print("Ready!")
@@ -163,7 +146,7 @@ async def get_status():
     }
 
 
-def get_meeting_repository() -> MeetingRepository:
+def get_meeting_repository() -> MeetingStore:
     if meeting_repository is None:
         raise HTTPException(status_code=503, detail="Meeting storage is not ready")
     return meeting_repository

@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from database import Meeting
+from meeting_entity import Meeting
 
 MeetingType = Literal["general", "design_review", "debug_sync", "standup"]
 SourceType = Literal["recording", "audio-file", "text"]

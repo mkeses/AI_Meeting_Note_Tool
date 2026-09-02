@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import transcription
+import llm
 
 
 class FakeWhisperModel:
@@ -31,12 +32,17 @@ class FakeOpenAI:
         self.models = SimpleNamespace(list=lambda: [])
 
 
+class FakeMeetingIntelligence:
+    def clean(self, text: str, system_prompt=None, meeting_type="general") -> str:
+        return f"cleaned:{text}:{meeting_type}"
+
+
 def test_transcription_service_initializes_faster_whisper_for_cpu_int8(
     monkeypatch,
 ) -> None:
     FakeWhisperModel.calls.clear()
     monkeypatch.setattr(transcription, "WhisperModel", FakeWhisperModel)
-    monkeypatch.setattr(transcription, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(llm, "OpenAI", FakeOpenAI)
 
     service = transcription.TranscriptionService(
         whisper_model="base.en",
@@ -54,3 +60,21 @@ def test_transcription_service_initializes_faster_whisper_for_cpu_int8(
     ]
     assert service.whisper_device == "cpu"
     assert service.whisper_compute_type == "int8"
+
+
+def test_transcription_service_accepts_an_injected_intelligence_provider(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(transcription, "WhisperModel", FakeWhisperModel)
+
+    service = transcription.TranscriptionService(
+        whisper_model="base.en",
+        llm_base_url="http://unused.test/v1",
+        llm_api_key="unused",
+        llm_model="unused",
+        llm_provider=FakeMeetingIntelligence(),
+    )
+
+    assert service.clean_with_llm("raw", meeting_type="standup") == (
+        "cleaned:raw:standup"
+    )

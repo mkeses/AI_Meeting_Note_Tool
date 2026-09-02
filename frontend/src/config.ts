@@ -28,6 +28,11 @@ function getDesktopBackendOrigin(): string | null {
   return origin ? normalizeBackendOrigin(origin) : null;
 }
 
+function getConfiguredBackendOrigin(): string | null {
+  const origin = import.meta.env.VITE_BACKEND_URL as string | undefined;
+  return origin && origin.trim() ? normalizeBackendOrigin(origin) : null;
+}
+
 /**
  * Returns an API path for browser/Vite development, or a loopback API URL for
  * the Electron renderer. Electron supplies its backend origin through the
@@ -37,7 +42,10 @@ export function getBackendApiUrl(path: string): string {
   const desktopBackendOrigin = getDesktopBackendOrigin();
 
   if (!desktopBackendOrigin) {
-    return path;
+    const configuredBackendOrigin = getConfiguredBackendOrigin();
+    return configuredBackendOrigin
+      ? new URL(path, configuredBackendOrigin).toString()
+      : path;
   }
 
   return new URL(path, desktopBackendOrigin).toString();
@@ -68,6 +76,13 @@ export function getTranscribeWebSocketUrl(): string {
       throw new Error('VITE_WS_URL must use the ws:// or wss:// protocol.');
     }
 
+    return appendTranscriptionPath(url);
+  }
+
+  const configuredBackendOrigin = getConfiguredBackendOrigin();
+  if (configuredBackendOrigin) {
+    const url = new URL(configuredBackendOrigin);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     return appendTranscriptionPath(url);
   }
 

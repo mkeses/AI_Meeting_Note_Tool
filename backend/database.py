@@ -9,9 +9,9 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from meeting_entity import Meeting
 
 DEFAULT_DATABASE_PATH = Path("data") / "meetings.db"
 
@@ -22,22 +22,6 @@ class MeetingStorageError(RuntimeError):
 
 class MeetingConflictError(MeetingStorageError):
     """Raised when a unique meeting identity already exists."""
-
-
-@dataclass(frozen=True, slots=True)
-class Meeting:
-    """Database representation of one saved meeting."""
-
-    id: str
-    source_key: str
-    filename: str
-    created_at: str
-    updated_at: str
-    meeting_type: str
-    raw_text: str
-    cleaned_text: str
-    source_type: str
-    notes: str
 
 
 class MeetingRepository:

@@ -37,6 +37,22 @@ describe('getTranscribeWebSocketUrl', () => {
     expect(getBackendApiUrl('/api/meetings')).toBe('/api/meetings');
   });
 
+  it('uses a configured remote backend origin for browser REST calls', () => {
+    vi.stubEnv('VITE_BACKEND_URL', 'https://api.example.com/');
+
+    expect(getBackendApiUrl('/api/meetings')).toBe(
+      'https://api.example.com/api/meetings'
+    );
+  });
+
+  it('derives a secure WebSocket endpoint from a configured remote backend', () => {
+    vi.stubEnv('VITE_BACKEND_URL', 'https://api.example.com');
+
+    expect(getTranscribeWebSocketUrl()).toBe(
+      'wss://api.example.com/ws/transcribe'
+    );
+  });
+
   it('uses Electron runtime backend origin for REST and live transcription', () => {
     vi.stubGlobal('meetingDesktop', {
       backendOrigin: 'http://127.0.0.1:8123',
