@@ -36,7 +36,7 @@ from auth import (
 )
 from auth_models import AuthenticatedUserResponse, AuthenticationRequest
 from meeting_models import MeetingCreate, MeetingResponse, MeetingUpdate
-from settings import Settings
+from settings import Settings, remote_cors_origins_from_environment
 from storage import (
     LOCAL_OWNER_ID,
     AuthenticationStorageError,
@@ -61,8 +61,8 @@ ELECTRON_RENDERER_ORIGIN = "meeting://renderer"
 
 
 def get_allowed_cors_origins() -> list[str]:
-    """Return browser origins allowed to call the local API."""
-    origins = [*VITE_CORS_ORIGINS]
+    """Return explicitly configured browser origins allowed to call the API."""
+    origins = [*VITE_CORS_ORIGINS, *remote_cors_origins_from_environment()]
 
     if (
         os.getenv("ELECTRON_DESKTOP_MODE") == "1"
@@ -70,7 +70,7 @@ def get_allowed_cors_origins() -> list[str]:
     ):
         origins.append(ELECTRON_RENDERER_ORIGIN)
 
-    return origins
+    return list(dict.fromkeys(origins))
 
 
 class CleanRequest(BaseModel):
@@ -331,8 +331,16 @@ def create_meeting(
     meeting: MeetingCreate,
     meeting_store: CurrentMeetingStore,
 ) -> MeetingResponse:
+    settings = get_application_settings()
+    if not settings.auth_enabled and meeting.created_at is None:
+        raise HTTPException(
+            status_code=422, detail="createdAt is required in local mode"
+        )
+
+    created_at = utc_now() if settings.auth_enabled else meeting.created_at
+    assert created_at is not None
     try:
-        created_meeting = meeting_store.create(meeting.to_record())
+        created_meeting = meeting_store.create(meeting.to_record(created_at=created_at))
     except MeetingConflictError as error:
         raise HTTPException(status_code=409, detail="Meeting already exists") from error
     except MeetingStorageError as error:

@@ -427,12 +427,16 @@ src/
 | -------- | -------------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `GET`    | `/api/status`                    | None                                                                                             | `status`, `whisper_model`, `llm_model`, `llm_base_url`                  | `status` is `initializing` until the service exists.                                                                 |
 | `GET`    | `/api/system-prompt`             | None                                                                                             | `{ "default_prompt": string }`                                          | `503` when the service is not ready.                                                                                 |
-| `GET`    | `/api/meetings`                  | None                                                                                             | Array of persisted meeting records                                      | `503` when meeting storage is unavailable.                                                                           |
-| `GET`    | `/api/meetings/search?q=<query>` | URL query                                                                                        | Matching persisted meeting records; empty/whitespace query returns `[]` | `503` when meeting storage is unavailable. Search covers `filename`, `cleanedText`, and `notes` through SQLite FTS5. |
-| `POST`   | `/api/meetings`                  | JSON meeting record                                                                              | Created meeting record                                                  | `409` for duplicate ID/source key; `503` when storage is unavailable.                                                |
-| `GET`    | `/api/meetings/{id}`             | None                                                                                             | Persisted meeting record                                                | `404` if missing; `503` when storage is unavailable.                                                                 |
-| `PATCH`  | `/api/meetings/{id}`             | JSON with one or more changed meeting fields                                                     | Updated meeting record                                                  | `404` if missing; `409` for duplicate source key; `422` with no changes.                                             |
-| `DELETE` | `/api/meetings/{id}`             | None                                                                                             | `204 No Content`                                                        | `404` if missing; `503` when storage is unavailable.                                                                 |
+| `POST`   | `/api/auth/register`             | `{ "login": string, "password": string }`                                                      | Authenticated-user record, `201`                                        | `409` for duplicate login; `422` for invalid input.                                                                  |
+| `POST`   | `/api/auth/login`                | `{ "login": string, "password": string }`                                                      | Authenticated-user record and HttpOnly session cookie                   | `401` for invalid credentials; `422` for invalid input.                                                              |
+| `POST`   | `/api/auth/logout`               | None                                                                                             | `204 No Content`; invalidates the current session when present          | `404` when remote authentication is disabled.                                                                        |
+| `GET`    | `/api/auth/me`                   | Session cookie                                                                                   | Authenticated-user record                                               | `401` without a valid session; `404` when remote authentication is disabled.                                         |
+| `GET`    | `/api/meetings`                  | Session cookie in remote mode                                                                    | Array of persisted meeting records                                      | `401` in remote mode without a valid session; `503` when storage is unavailable.                                     |
+| `GET`    | `/api/meetings/search?q=<query>` | Session cookie and URL query                                                                     | Matching persisted meeting records; empty/whitespace query returns `[]` | `401` in remote mode without a valid session; `503` when storage is unavailable. Search covers `filename`, `cleanedText`, and `notes`. |
+| `POST`   | `/api/meetings`                  | JSON meeting record                                                                              | Created meeting record, `201`                                           | `401` in remote mode without a valid session; `409` for duplicate ID/source key; `422` for invalid input.            |
+| `GET`    | `/api/meetings/{id}`             | Session cookie in remote mode                                                                    | Persisted meeting record                                                | `401` without a valid session; `404` if missing or owned by another user; `503` when storage is unavailable.         |
+| `PATCH`  | `/api/meetings/{id}`             | Session cookie and JSON with one or more changed meeting fields                                  | Updated meeting record                                                  | `401` without a valid session; `404` if missing/not owned; `409` for duplicate source key; `422` with no changes.    |
+| `DELETE` | `/api/meetings/{id}`             | Session cookie in remote mode                                                                    | `204 No Content`                                                        | `401` without a valid session; `404` if missing/not owned; `503` when storage is unavailable.                        |
 | `POST`   | `/api/transcribe`                | `multipart/form-data` with required `audio` file                                                 | `{ "success": true, "text": string }`                                   | `503` if unready; `500` if file transcription fails.                                                                 |
 | `POST`   | `/api/clean`                     | JSON: required `text`; optional `system_prompt`; optional `meeting_type` (defaults to `general`) | `{ "success": true, "text": string }`                                   | FastAPI validation errors for invalid JSON; `503` if unready; `502` if LLM cleanup fails.                            |
 
@@ -533,6 +537,26 @@ The backend stores Argon2 password hashes and only HMAC hashes of opaque
 session tokens. Login sets an HttpOnly, SameSite=Lax cookie. Set
 `AUTH_COOKIE_SECURE=0` only for an HTTPS-free local remote-auth development
 environment; production deployments should retain the secure-cookie default.
+
+Remote meeting routes derive ownership exclusively from that session; request
+payloads cannot contain owner or user identifiers. In remote mode the server
+also sets `createdAt`; local mode preserves the existing client-provided
+timestamp contract. Meeting responses use camelCase fields and list/search
+responses remain arrays, with no pagination yet.
+
+### Remote frontend CORS
+
+Credentialed browser access is opt-in. Set a comma-separated list of exact
+PWA origins (scheme, host, and optional port; no path or trailing slash):
+
+```env
+REMOTE_CORS_ORIGINS=https://app.example.com,https://staging.example.com
+```
+
+The API never enables wildcard origins for cookie-based requests. A future
+cross-origin frontend must send its session cookie with `credentials: 'include'`.
+The local Vite and Electron renderer origins remain configured separately and
+continue to work without this setting.
 
 ---
 

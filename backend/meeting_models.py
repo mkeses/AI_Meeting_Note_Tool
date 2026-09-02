@@ -23,7 +23,7 @@ class MeetingCreate(MeetingModel):
     id: str = Field(min_length=1, max_length=255)
     source_key: str = Field(min_length=1, max_length=255, alias="sourceKey")
     filename: str = Field(min_length=1, max_length=255)
-    created_at: datetime = Field(alias="createdAt")
+    created_at: datetime | None = Field(default=None, alias="createdAt")
     meeting_type: MeetingType = Field(alias="meetingType")
     raw_text: str = Field(alias="rawText")
     cleaned_text: str = Field(default="", alias="cleanedText")
@@ -40,19 +40,21 @@ class MeetingCreate(MeetingModel):
 
     @field_validator("created_at")
     @classmethod
-    def normalize_created_at(cls, value: datetime) -> datetime:
+    def normalize_created_at(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("must include a timezone")
         return value.astimezone(UTC)
 
-    def to_record(self) -> Meeting:
-        created_at = self.created_at.isoformat()
+    def to_record(self, *, created_at: datetime) -> Meeting:
+        created_at_value = created_at.astimezone(UTC).isoformat()
         return Meeting(
             id=self.id,
             source_key=self.source_key,
             filename=self.filename,
-            created_at=created_at,
-            updated_at=created_at,
+            created_at=created_at_value,
+            updated_at=created_at_value,
             meeting_type=self.meeting_type,
             raw_text=self.raw_text,
             cleaned_text=self.cleaned_text,
@@ -87,6 +89,7 @@ class MeetingUpdate(MeetingModel):
 
 
 class MeetingResponse(MeetingCreate):
+    created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
 
     @classmethod

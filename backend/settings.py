@@ -3,6 +3,44 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
+
+
+def remote_cors_origins_from_environment() -> list[str]:
+    """Read the explicit browser origins allowed for a remote API."""
+    origins: list[str] = []
+    for configured_origin in os.getenv("REMOTE_CORS_ORIGINS", "").split(","):
+        origin = configured_origin.strip()
+        if not origin:
+            continue
+
+        parsed = urlsplit(origin)
+        try:
+            _port = parsed.port
+        except ValueError as error:
+            raise RuntimeError(
+                "REMOTE_CORS_ORIGINS entries must be exact http or https origins"
+            ) from error
+
+        normalized_origin = f"{parsed.scheme}://{parsed.netloc}"
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username
+            or parsed.password
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or origin != normalized_origin
+        ):
+            raise RuntimeError(
+                "REMOTE_CORS_ORIGINS entries must be exact http or https origins"
+            )
+
+        if origin not in origins:
+            origins.append(origin)
+
+    return origins
 
 
 @dataclass(frozen=True, slots=True)

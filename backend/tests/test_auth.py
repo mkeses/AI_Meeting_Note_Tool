@@ -239,3 +239,36 @@ def test_meetings_are_scoped_to_the_authenticated_user(remote_client) -> None:
         assert alice_client.get("/api/meetings/meeting-a").status_code == 200
     finally:
         bob_client.close()
+
+
+def test_authenticated_user_can_manage_only_their_own_meetings(remote_client) -> None:
+    client, _store = remote_client
+    register(client, "alice")
+    login(client, "alice")
+
+    created = client.post("/api/meetings", json=meeting_payload())
+    assert created.status_code == 201
+    assert client.get("/api/meetings").json() == [created.json()]
+    assert client.get("/api/meetings/meeting-a").json() == created.json()
+
+    updated = client.patch("/api/meetings/meeting-a", json={"notes": "follow up"})
+    assert updated.status_code == 200
+    assert updated.json()["notes"] == "follow up"
+    assert client.get("/api/meetings/search?q=follow").json() == [updated.json()]
+
+    assert client.delete("/api/meetings/meeting-a").status_code == 204
+    assert client.get("/api/meetings/meeting-a").status_code == 404
+
+
+def test_remote_meeting_creation_uses_a_server_timestamp(remote_client) -> None:
+    client, _store = remote_client
+    register(client, "alice")
+    login(client, "alice")
+
+    created = client.post(
+        "/api/meetings",
+        json=meeting_payload(createdAt="2000-01-01T00:00:00.000Z"),
+    )
+
+    assert created.status_code == 201
+    assert created.json()["createdAt"] != "2000-01-01T00:00:00+00:00"
