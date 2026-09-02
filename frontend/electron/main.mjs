@@ -1,8 +1,24 @@
 import { app, BrowserWindow } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  initializeDesktopRuntime,
+  resolveDesktopResourcePaths,
+} from './desktop-runtime.mjs';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
+app.setName('AI Meeting Note Tool');
+
+const desktopRuntime = initializeDesktopRuntime({
+  platform: process.platform,
+  localAppData: process.env.LOCALAPPDATA,
+  userDataPath: app.getPath('userData'),
+});
+
+app.setPath('userData', desktopRuntime.paths.electronUserDataDirectory);
+app.setPath('sessionData', desktopRuntime.paths.electronSessionDataDirectory);
+app.setAppLogsPath(desktopRuntime.paths.logsDirectory);
+
 const developmentRendererUrl =
   process.env.ELECTRON_RENDERER_URL ?? 'http://127.0.0.1:3000';
 const useProductionRenderer =
@@ -45,7 +61,12 @@ function createWindow() {
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   if (useProductionRenderer) {
-    void window.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'));
+    const resources = resolveDesktopResourcePaths({
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+    });
+
+    void window.loadFile(resources.rendererIndexPath);
     return;
   }
 

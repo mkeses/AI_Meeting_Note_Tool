@@ -19,6 +19,7 @@
     "type-check": "tsc --noEmit",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:electron": "node --test electron/*.node-test.mjs",
     "electron:dev": "electron .",
     "electron:preview": "electron . --production"
   },
