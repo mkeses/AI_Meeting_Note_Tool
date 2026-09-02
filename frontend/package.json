@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "main": "electron/main.mjs",
   "engines": {
     "node": ">=24.0.0",
     "npm": ">=10.0.0"
@@ -17,7 +18,9 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
     "type-check": "tsc --noEmit",
     "test": "vitest",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "electron:dev": "electron .",
+    "electron:preview": "electron . --production"
   },
   "dependencies": {
     "jspdf": "^4.2.1",
@@ -35,6 +38,7 @@
     "@typescript-eslint/eslint-plugin": "^8.46.3",
     "@typescript-eslint/parser": "^8.46.3",
     "@vitejs/plugin-react": "^5.1.0",
+    "electron": "^40.10.6",
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
@@ -48,5 +52,8 @@
     "typescript-eslint": "^8.46.3",
     "vite": "^7.1.12",
     "vitest": "^4.1.11"
+  },
+  "allowScripts": {
+    "electron@40.10.6": true
   }
 }

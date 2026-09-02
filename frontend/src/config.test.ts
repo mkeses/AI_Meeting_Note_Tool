@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getTranscribeWebSocketUrl } from './config';
+import { getBackendApiUrl, getTranscribeWebSocketUrl } from './config';
 
 describe('getTranscribeWebSocketUrl', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
   it('uses a configured secure WebSocket transcription endpoint', () => {
@@ -29,6 +30,34 @@ describe('getTranscribeWebSocketUrl', () => {
 
     expect(getTranscribeWebSocketUrl()).toBe(
       `${protocol}://${window.location.hostname}:8123/ws/transcribe`
+    );
+  });
+
+  it('keeps browser REST API paths relative for the Vite proxy', () => {
+    expect(getBackendApiUrl('/api/meetings')).toBe('/api/meetings');
+  });
+
+  it('uses Electron runtime backend origin for REST and live transcription', () => {
+    vi.stubGlobal('meetingDesktop', {
+      backendOrigin: 'http://127.0.0.1:8123',
+    });
+    vi.stubEnv('VITE_WS_URL', 'wss://ignored.example.com');
+
+    expect(getBackendApiUrl('/api/meetings')).toBe(
+      'http://127.0.0.1:8123/api/meetings'
+    );
+    expect(getTranscribeWebSocketUrl()).toBe(
+      'ws://127.0.0.1:8123/ws/transcribe'
+    );
+  });
+
+  it('converts a secure Electron runtime origin to a secure WebSocket URL', () => {
+    vi.stubGlobal('meetingDesktop', {
+      backendOrigin: 'https://127.0.0.1:8443',
+    });
+
+    expect(getTranscribeWebSocketUrl()).toBe(
+      'wss://127.0.0.1:8443/ws/transcribe'
     );
   });
 });

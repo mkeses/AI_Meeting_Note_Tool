@@ -6,6 +6,9 @@ export default defineConfig(({ mode }) => {
   const backendUrl = VITE_BACKEND_URL || 'http://localhost:8000';
 
   return {
+    // The packaged Electron renderer loads index.html from the local filesystem,
+    // where production assets must remain relative to the built page.
+    base: './',
     plugins: [react()],
     server: {
       host: '0.0.0.0',

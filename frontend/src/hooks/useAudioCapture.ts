@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { getTranscribeWebSocketUrl } from '../config';
+import pcmProcessorUrl from '../audio/pcm-processor.ts?worker&url';
 
 interface UseAudioCaptureOptions {
   includeMicrophone: boolean;
@@ -253,9 +254,7 @@ export function useAudioCapture({
         });
         audioContextRef.current = audioContext;
 
-        await audioContext.audioWorklet.addModule(
-          '/src/audio/pcm-processor.ts'
-        );
+        await audioContext.audioWorklet.addModule(pcmProcessorUrl);
 
         if (audioContext.state === 'suspended') {
           await audioContext.resume();

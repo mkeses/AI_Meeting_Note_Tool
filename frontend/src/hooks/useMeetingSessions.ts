@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { getBackendApiUrl } from '../config';
 
 export type MeetingType =
   | 'general'
@@ -155,7 +156,9 @@ export function useMeetingSessions() {
       setError(null);
 
       try {
-        const response = await fetchMeetingJson('/api/meetings');
+        const response = await fetchMeetingJson(
+          getBackendApiUrl('/api/meetings')
+        );
         const loadedSessions = parseSavedSessions(response);
 
         if (mounted) {
@@ -217,7 +220,9 @@ export function useMeetingSessions() {
 
       try {
         const response = await fetchMeetingJson(
-          `/api/meetings/search?q=${encodeURIComponent(normalizedQuery)}`
+          getBackendApiUrl(
+            `/api/meetings/search?q=${encodeURIComponent(normalizedQuery)}`
+          )
         );
         const sessions = parseSavedSessions(response);
 
@@ -273,7 +278,9 @@ export function useMeetingSessions() {
 
       try {
         const response = await fetchMeetingJson(
-          `/api/meetings/${encodeURIComponent(activeSessionId)}`,
+          getBackendApiUrl(
+            `/api/meetings/${encodeURIComponent(activeSessionId)}`
+          ),
           {
             method: 'PATCH',
             headers: {
@@ -317,7 +324,9 @@ export function useMeetingSessions() {
 
       try {
         const response = await fetchMeetingJson(
-          `/api/meetings/${encodeURIComponent(activeSessionId)}`,
+          getBackendApiUrl(
+            `/api/meetings/${encodeURIComponent(activeSessionId)}`
+          ),
           {
             method: 'PATCH',
             headers: {
@@ -362,7 +371,9 @@ export function useMeetingSessions() {
       try {
         if (existingSession) {
           const response = await fetchMeetingJson(
-            `/api/meetings/${encodeURIComponent(existingSession.id)}`,
+            getBackendApiUrl(
+              `/api/meetings/${encodeURIComponent(existingSession.id)}`
+            ),
             {
               method: 'PATCH',
               headers: {
@@ -392,13 +403,16 @@ export function useMeetingSessions() {
           };
         }
 
-        const response = await fetchMeetingJson('/api/meetings', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(newSession),
-        });
+        const response = await fetchMeetingJson(
+          getBackendApiUrl('/api/meetings'),
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(newSession),
+          }
+        );
         const createdSession = parseSavedSession(response);
 
         setSavedSessions((currentSessions) => [
@@ -428,7 +442,7 @@ export function useMeetingSessions() {
     } | null> => {
       try {
         const response = await fetch(
-          `/api/meetings/${encodeURIComponent(sessionId)}`,
+          getBackendApiUrl(`/api/meetings/${encodeURIComponent(sessionId)}`),
           {
             method: 'DELETE',
           }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { getBackendApiUrl } from '../config';
 
 interface UseTranscriptCleanupOptions {
   useLLM: boolean;
@@ -24,7 +25,7 @@ export function useTranscriptCleanup({
 
     const loadPrompt = async () => {
       try {
-        const response = await fetch('/api/system-prompt');
+        const response = await fetch(getBackendApiUrl('/api/system-prompt'));
 
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
@@ -67,7 +68,7 @@ export function useTranscriptCleanup({
       setIsCleaningWithLLM(true);
 
       try {
-        const response = await fetch('/api/clean', {
+        const response = await fetch(getBackendApiUrl('/api/clean'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
