@@ -18,7 +18,7 @@ class TranscriptionService:
     def __init__(
         self, whisper_model: str, llm_base_url: str, llm_api_key: str, llm_model: str
     ):
-        print(f"🔄 Loading Whisper model '{whisper_model}'...")
+        print(f"Loading Whisper model '{whisper_model}'...")
 
         self.whisper_device = "cpu"
         self.whisper_compute_type = "int8"
@@ -27,27 +27,27 @@ class TranscriptionService:
             device="cpu",
             compute_type="int8",
         )
-        print("✅ Faster-Whisper loaded on CPU (int8)")
+        print("Faster-Whisper loaded on CPU (int8)")
 
         print(
-            f"✅ Whisper model '{whisper_model}' loaded on {self.whisper_device} "
+            f"Whisper model '{whisper_model}' loaded on {self.whisper_device} "
             f"with compute_type={self.whisper_compute_type}"
         )
 
-        print(f"🔄 Connecting to LLM at {llm_base_url}...")
+        print(f"Connecting to LLM at {llm_base_url}...")
         self.llm_client = OpenAI(base_url=llm_base_url, api_key=llm_api_key)
         self.llm_model = llm_model
 
         try:
             self.llm_client.models.list()
-            print("✅ Connected to LLM API!")
+            print("Connected to LLM API!")
         except Exception as e:
-            print(f"⚠️  Warning: Could not connect to LLM: {e}")
+            print(f"Warning: Could not connect to LLM: {e}")
             print(f"   Make sure your LLM server is running at {llm_base_url}")
 
     def transcribe(self, audio_file):
         print(
-            f"🔄 Transcribing with Faster-Whisper "
+            f"Transcribing with Faster-Whisper "
             f"({self.whisper_device}, {self.whisper_compute_type})..."
         )
 
@@ -61,10 +61,10 @@ class TranscriptionService:
 
         text = " ".join(segment.text for segment in segments).strip()
         print(
-            f"📝 Detected language: {info.language} "
+            f"Detected language: {info.language} "
             f"(p={info.language_probability:.2f})"
         )
-        print(f"📝 Raw: {text}")
+        print(f"Raw: {text!r}")
         return text
 
     def get_default_system_prompt(self):
@@ -111,7 +111,7 @@ common output structure.
         prompt_to_use = self.build_meeting_prompt(prompt_to_use, meeting_type)
 
         print("FINAL PROMPT:\n", prompt_to_use)
-        print("🤖 Cleaning with LLM...")
+        print("Cleaning with LLM...")
 
         response = self.llm_client.chat.completions.create(
             model=self.llm_model,
@@ -124,7 +124,7 @@ common output structure.
         )
 
         cleaned = response.choices[0].message.content.strip()
-        print(f"✨ Cleaned: {cleaned}")
+        print(f"Cleaned: {cleaned}")
         return cleaned
 
     def transcribe_file(self, audio_file_path: str, use_llm: bool = True) -> dict:

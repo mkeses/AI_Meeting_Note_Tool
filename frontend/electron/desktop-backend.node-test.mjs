@@ -11,7 +11,7 @@ import {
   waitForBackendReadiness,
 } from './desktop-backend.mjs';
 
-function createDesktopRuntime() {
+function createDesktopRuntime({ llm = {} } = {}) {
   return {
     paths: {
       databasePath: '/runtime/data/meetings.db',
@@ -20,8 +20,8 @@ function createDesktopRuntime() {
     config: {
       whisperModel: 'base.en',
       llm: {
-        baseUrl: 'http://127.0.0.1:11434/v1',
-        model: 'gemma3:4b',
+        baseUrl: llm.baseUrl ?? 'http://127.0.0.1:11434/v1',
+        model: llm.model ?? 'gemma3:4b',
       },
     },
   };
@@ -149,6 +149,69 @@ test('builds the packaged backend executable launch command from desktop runtime
   assert.equal(spec.options.env.ELECTRON_RENDERER_ORIGIN, 'meeting://renderer');
   assert.equal(spec.options.env.PYTHONUNBUFFERED, '1');
   assert.equal(spec.options.env.LLM_API_KEY, 'existing-secret');
+});
+
+test('supplies the non-secret Ollama API key for the built-in desktop configuration', () => {
+  const spec = buildBackendLaunchSpec({
+    desktopRuntime: createDesktopRuntime(),
+    backendWorkingDirectory: '/resources/backend',
+    backendExecutablePath: '/resources/backend/ai-meeting-note-backend.exe',
+    port: 45678,
+    rendererOrigin: 'meeting://renderer',
+    inheritedEnvironment: {},
+  });
+
+  assert.equal(spec.options.env.LLM_API_KEY, 'ollama');
+});
+
+test('preserves external LLM settings without inventing an API key', () => {
+  const spec = buildBackendLaunchSpec({
+    desktopRuntime: createDesktopRuntime({
+      llm: {
+        baseUrl: 'https://llm.example.test/v1',
+        model: 'external-model',
+      },
+    }),
+    backendWorkingDirectory: '/resources/backend',
+    backendExecutablePath: '/resources/backend/ai-meeting-note-backend.exe',
+    port: 45678,
+    rendererOrigin: 'meeting://renderer',
+    inheritedEnvironment: { LLM_API_KEY: 'external-key' },
+  });
+
+  assert.equal(spec.options.env.LLM_BASE_URL, 'https://llm.example.test/v1');
+  assert.equal(spec.options.env.LLM_MODEL, 'external-model');
+  assert.equal(spec.options.env.LLM_API_KEY, 'external-key');
+});
+
+test('does not supply an API key for an external LLM configuration', () => {
+  const spec = buildBackendLaunchSpec({
+    desktopRuntime: createDesktopRuntime({
+      llm: {
+        baseUrl: 'https://llm.example.test/v1',
+        model: 'external-model',
+      },
+    }),
+    backendWorkingDirectory: '/resources/backend',
+    backendExecutablePath: '/resources/backend/ai-meeting-note-backend.exe',
+    port: 45678,
+    rendererOrigin: 'meeting://renderer',
+    inheritedEnvironment: {},
+  });
+
+  assert.equal(spec.options.env.LLM_API_KEY, undefined);
+});
+
+test('does not add an Ollama API key to the development backend command', () => {
+  const spec = buildBackendLaunchSpec({
+    desktopRuntime: createDesktopRuntime(),
+    backendWorkingDirectory: '/workspace/backend',
+    port: 45678,
+    rendererOrigin: 'http://localhost:3000',
+    inheritedEnvironment: {},
+  });
+
+  assert.equal(spec.options.env.LLM_API_KEY, undefined);
 });
 
 test('retries readiness until the backend reports ready', async () => {

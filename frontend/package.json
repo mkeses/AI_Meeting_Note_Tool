@@ -21,7 +21,8 @@
     "test:run": "vitest run",
     "test:electron": "node --test electron/*.node-test.mjs",
     "electron:dev": "electron .",
-    "electron:preview": "electron . --production"
+    "electron:preview": "electron . --production",
+    "package:win": "npm run build && node electron/package-windows.mjs"
   },
   "dependencies": {
     "jspdf": "^4.2.1",
@@ -30,6 +31,7 @@
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@electron/packager": "^20.3.0",
     "@eslint/js": "^9.39.1",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",

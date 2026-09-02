@@ -1,4 +1,12 @@
-import { app, BrowserWindow, dialog, net, protocol } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  desktopCapturer,
+  dialog,
+  net,
+  protocol,
+  session,
+} from 'electron';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -17,6 +25,7 @@ import {
   initializeDesktopRuntime,
   resolveDesktopResourcePaths,
 } from './desktop-runtime.mjs';
+import { configureDesktopMediaCapture } from './desktop-media.mjs';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 protocol.registerSchemesAsPrivileged([
@@ -162,6 +171,12 @@ async function startDesktopApplication() {
 
 app.whenReady().then(async () => {
   try {
+    configureDesktopMediaCapture({
+      session: session.defaultSession,
+      desktopCapturer,
+      rendererOrigin: getRendererOrigin(),
+      platform: process.platform,
+    });
     await startDesktopApplication();
   } catch (error) {
     dialog.showErrorBox(

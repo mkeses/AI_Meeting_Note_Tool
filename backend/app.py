@@ -100,7 +100,7 @@ async def lifespan(app: FastAPI):
     """Initialize the local Whisper and LLM-backed transcription service."""
     global meeting_repository, service
 
-    print("🚀 Starting AI Transcript App...")
+    print("Starting AI Transcript App...")
 
     whisper_model = os.getenv("WHISPER_MODEL")
     llm_base_url = os.getenv("LLM_BASE_URL")
@@ -132,7 +132,7 @@ async def lifespan(app: FastAPI):
     meeting_repository = MeetingRepository.from_environment()
     meeting_repository.initialize()
 
-    print("✅ Ready!")
+    print("Ready!")
 
     try:
         yield
@@ -170,7 +170,7 @@ def get_meeting_repository() -> MeetingRepository:
 
 
 def raise_storage_http_error(error: MeetingStorageError) -> None:
-    print(f"❌ Meeting storage error: {error}")
+    print(f"Meeting storage error: {error}")
     raise HTTPException(
         status_code=503, detail="Meeting storage is unavailable"
     ) from error
@@ -291,7 +291,7 @@ async def transcribe_audio(audio: Annotated[UploadFile, File()]):
         }
 
     except Exception as error:
-        print(f"❌ Transcription error: {error}")
+        print(f"Transcription error: {error}")
 
         raise HTTPException(
             status_code=500,
@@ -321,7 +321,7 @@ async def clean_text(request: CleanRequest):
         }
 
     except Exception as error:
-        print(f"❌ LLM cleaning failed: {error}")
+        print(f"LLM cleaning failed: {error}")
 
         raise HTTPException(
             status_code=502,
@@ -361,10 +361,10 @@ async def transcribe_chunks(audio_chunks: list[bytes]) -> str:
         ).strip()
 
         print(
-            f"📝 Detected language: {info.language} "
+            f"Detected language: {info.language} "
             f"(p={info.language_probability:.2f})"
         )
-        print(f"📝 Raw: {text!r}")
+        print(f"Raw: {text!r}")
 
         return text
 
@@ -416,7 +416,7 @@ async def transcribe_chunk_words(
         buffer_seconds = len(pcm_bytes) / BYTES_PER_SECOND
 
         print(
-            "⏱️ LIVE TRANSCRIBE TIMING "
+            "LIVE TRANSCRIBE TIMING "
             f"window={buffer_seconds:.1f}s "
             f"resample={resample_elapsed:.2f}s "
             f"whisper={whisper_elapsed:.2f}s "
@@ -578,7 +578,7 @@ async def transcribe_websocket(websocket: WebSocket):
                 partial_text = new_text
 
             print(
-                "📌 BACKEND OUTPUT",
+                "BACKEND OUTPUT",
                 {
                     "committed_text": next_committed_text,
                     "partial_text": partial_text,
@@ -633,7 +633,7 @@ async def transcribe_websocket(websocket: WebSocket):
 
         if live_transcription_task is not None:
             if not live_transcription_task.done():
-                print("⏭️ SKIPPED live transcription — previous task still running")
+                print("SKIPPED live transcription - previous task still running")
                 return False
 
             await finish_live_task()

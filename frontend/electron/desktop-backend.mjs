@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import { DEFAULT_DESKTOP_RUNTIME_CONFIG } from './desktop-runtime.mjs';
 
 export const LOOPBACK_HOST = '127.0.0.1';
 export const DEFAULT_STARTUP_TIMEOUT_MS = 300_000;
@@ -29,6 +30,28 @@ export function resolveBackendLaunchTarget({
 
 function getErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function resolveDesktopLlmApiKey({
+  desktopRuntime,
+  inheritedEnvironment,
+  isPackagedBackend,
+}) {
+  const inheritedApiKey = inheritedEnvironment.LLM_API_KEY;
+
+  if (inheritedApiKey) {
+    return inheritedApiKey;
+  }
+
+  if (
+    isPackagedBackend &&
+    desktopRuntime.config.llm.baseUrl ===
+      DEFAULT_DESKTOP_RUNTIME_CONFIG.llm.baseUrl
+  ) {
+    return 'ollama';
+  }
+
+  return undefined;
 }
 
 function formatLifecycleEvent(event, details) {
@@ -109,6 +132,26 @@ export function buildBackendLaunchSpec({
   inheritedEnvironment = process.env,
 }) {
   const isPackagedBackend = Boolean(backendExecutablePath);
+  const environment = {
+    ...inheritedEnvironment,
+    DATABASE_PATH: desktopRuntime.paths.databasePath,
+    HF_HOME: desktopRuntime.paths.modelCacheDirectory,
+    WHISPER_MODEL: desktopRuntime.config.whisperModel,
+    LLM_BASE_URL: desktopRuntime.config.llm.baseUrl,
+    LLM_MODEL: desktopRuntime.config.llm.model,
+    ELECTRON_DESKTOP_MODE: '1',
+    ELECTRON_RENDERER_ORIGIN: rendererOrigin,
+    PYTHONUNBUFFERED: '1',
+  };
+  const llmApiKey = resolveDesktopLlmApiKey({
+    desktopRuntime,
+    inheritedEnvironment,
+    isPackagedBackend,
+  });
+
+  if (llmApiKey) {
+    environment.LLM_API_KEY = llmApiKey;
+  }
 
   return {
     command: backendExecutablePath ?? backendCommand,
@@ -127,17 +170,7 @@ export function buildBackendLaunchSpec({
         ],
     options: {
       cwd: backendWorkingDirectory,
-      env: {
-        ...inheritedEnvironment,
-        DATABASE_PATH: desktopRuntime.paths.databasePath,
-        HF_HOME: desktopRuntime.paths.modelCacheDirectory,
-        WHISPER_MODEL: desktopRuntime.config.whisperModel,
-        LLM_BASE_URL: desktopRuntime.config.llm.baseUrl,
-        LLM_MODEL: desktopRuntime.config.llm.model,
-        ELECTRON_DESKTOP_MODE: '1',
-        ELECTRON_RENDERER_ORIGIN: rendererOrigin,
-        PYTHONUNBUFFERED: '1',
-      },
+      env: environment,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     },

@@ -121,6 +121,27 @@ export function useAudioCapture({
       };
 
       try {
+        if (!navigator.mediaDevices?.getDisplayMedia) {
+          throw new Error(
+            'Desktop audio capture is not supported by this browser.'
+          );
+        }
+
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error(
+            'Microphone capture is not supported by this browser.'
+          );
+        }
+
+        onError('');
+
+        displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true,
+          systemAudio: 'include',
+        } as DisplayMediaStreamOptions);
+        activeStreamsRef.current = [displayStream];
+
         socket = new WebSocket(getTranscribeWebSocketUrl());
 
         if (onSocketMessage) {
@@ -191,27 +212,6 @@ export function useAudioCapture({
         });
 
         liveSocketRef.current = socket;
-
-        if (!navigator.mediaDevices?.getDisplayMedia) {
-          throw new Error(
-            'Desktop audio capture is not supported by this browser.'
-          );
-        }
-
-        if (!navigator.mediaDevices?.getUserMedia) {
-          throw new Error(
-            'Microphone capture is not supported by this browser.'
-          );
-        }
-
-        onError('');
-
-        displayStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: true,
-          systemAudio: 'include',
-        } as DisplayMediaStreamOptions);
-        activeStreamsRef.current = [displayStream];
 
         const displayVideoTracks = displayStream.getVideoTracks();
         const desktopTracks = displayStream.getAudioTracks();

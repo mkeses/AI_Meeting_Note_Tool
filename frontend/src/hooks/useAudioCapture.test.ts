@@ -249,7 +249,7 @@ function renderAudioCapture() {
 async function startRecording(
   capture: ReturnType<typeof renderAudioCapture>
 ): Promise<FakeWebSocket> {
-  const { socket, startPromise } = beginRecording(capture);
+  const { socket, startPromise } = await beginRecording(capture);
 
   act(() => {
     socket.open();
@@ -262,14 +262,21 @@ async function startRecording(
   return socket;
 }
 
-function beginRecording(capture: ReturnType<typeof renderAudioCapture>) {
-  const startPromise = capture.result.current.startRecording(
+function invokeRecording(capture: ReturnType<typeof renderAudioCapture>) {
+  return capture.result.current.startRecording(
     capture.liveSocketRef,
     capture.resetLiveState,
     capture.setSessionFilename,
     capture.setSessionInputType,
     capture.recordingSourceKeyRef
   );
+}
+
+async function beginRecording(capture: ReturnType<typeof renderAudioCapture>) {
+  const startPromise = invokeRecording(capture);
+
+  await Promise.resolve();
+
   const socket = FakeWebSocket.instances[0];
 
   if (!socket) {
@@ -351,15 +358,17 @@ describe('useAudioCapture startup cleanup', () => {
     configureBrowser(getDisplayMedia, getUserMedia);
 
     const capture = renderAudioCapture();
-    const socket = await startRecording(capture);
+    const startPromise = invokeRecording(capture);
+
+    await act(async () => {
+      await startPromise;
+    });
 
     expect(getDisplayMedia).toHaveBeenCalledTimes(1);
     expect(getUserMedia).not.toHaveBeenCalled();
     expect(FakeAudioContext.instances).toHaveLength(0);
     expect(FakeMediaRecorder.instances).toHaveLength(0);
-    expect(socket.closeCalls).toEqual([
-      { code: 1000, reason: 'Recording ended' },
-    ]);
+    expect(FakeWebSocket.instances).toHaveLength(0);
     expect(capture.liveSocketRef.current).toBeNull();
     expect(capture.result.current.isRecording).toBe(false);
     expect(capture.onRecordingStateChange).toHaveBeenLastCalledWith(false);
@@ -367,6 +376,59 @@ describe('useAudioCapture startup cleanup', () => {
     expect(capture.onError).toHaveBeenLastCalledWith(
       'Audio capture failed: Screen sharing was denied'
     );
+  });
+
+  it('requests display capture before waiting for the live socket to open', async () => {
+    const displayAudioTrack = createTrack();
+    const displayVideoTrack = createTrack();
+    const microphoneTrack = createTrack();
+    let resolveDisplay: (stream: MediaStream) => void;
+    const getDisplayMedia = vi.fn<
+      (constraints?: DisplayMediaStreamOptions) => Promise<MediaStream>
+    >(
+      () =>
+        new Promise<MediaStream>((resolve) => {
+          resolveDisplay = resolve;
+        })
+    );
+    const getUserMedia =
+      vi.fn<(constraints?: MediaStreamConstraints) => Promise<MediaStream>>();
+
+    getUserMedia.mockResolvedValue(createStream([microphoneTrack], []));
+    configureBrowser(getDisplayMedia, getUserMedia);
+
+    const capture = renderAudioCapture();
+    const startPromise = invokeRecording(capture);
+
+    expect(getDisplayMedia).toHaveBeenCalledWith({
+      video: true,
+      audio: true,
+      systemAudio: 'include',
+    });
+    expect(FakeWebSocket.instances).toHaveLength(0);
+
+    await act(async () => {
+      resolveDisplay!(createStream([displayAudioTrack], [displayVideoTrack]));
+      await Promise.resolve();
+    });
+
+    const socket = FakeWebSocket.instances[0];
+
+    if (!socket) {
+      throw new Error(
+        'Expected display capture to continue to socket startup.'
+      );
+    }
+
+    act(() => {
+      socket.open();
+    });
+
+    await act(async () => {
+      await startPromise;
+    });
+
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
   });
 
   it('cleans up desktop capture when the microphone has no audio track', async () => {
@@ -640,7 +702,13 @@ describe('useAudioCapture startup cleanup', () => {
     configureBrowser(getDisplayMedia, getUserMedia);
 
     const capture = renderAudioCapture();
-    const { socket, startPromise } = beginRecording(capture);
+    const displayAudioTrack = createTrack();
+    const displayVideoTrack = createTrack();
+    getDisplayMedia.mockResolvedValue(
+      createStream([displayAudioTrack], [displayVideoTrack])
+    );
+
+    const { socket, startPromise } = await beginRecording(capture);
 
     act(() => {
       socket.fail();
@@ -654,8 +722,10 @@ describe('useAudioCapture startup cleanup', () => {
     expect(socket.closeCalls).toEqual([
       { code: 1000, reason: 'Recording ended' },
     ]);
-    expect(getDisplayMedia).not.toHaveBeenCalled();
+    expect(getDisplayMedia).toHaveBeenCalledTimes(1);
     expect(getUserMedia).not.toHaveBeenCalled();
+    expect(displayAudioTrack.stop).toHaveBeenCalledTimes(1);
+    expect(displayVideoTrack.stop).toHaveBeenCalledTimes(1);
     expect(capture.liveSocketRef.current).toBeNull();
     expect(capture.result.current.isRecording).toBe(false);
     expect(capture.onRecordingStateChange).toHaveBeenLastCalledWith(false);
@@ -675,7 +745,13 @@ describe('useAudioCapture startup cleanup', () => {
     configureBrowser(getDisplayMedia, getUserMedia);
 
     const capture = renderAudioCapture();
-    const { socket, startPromise } = beginRecording(capture);
+    const displayAudioTrack = createTrack();
+    const displayVideoTrack = createTrack();
+    getDisplayMedia.mockResolvedValue(
+      createStream([displayAudioTrack], [displayVideoTrack])
+    );
+
+    const { socket, startPromise } = await beginRecording(capture);
 
     act(() => {
       socket.serverClose('Backend unavailable');
@@ -687,8 +763,10 @@ describe('useAudioCapture startup cleanup', () => {
 
     expect(socket.sent).toEqual([]);
     expect(socket.closeCalls).toEqual([]);
-    expect(getDisplayMedia).not.toHaveBeenCalled();
+    expect(getDisplayMedia).toHaveBeenCalledTimes(1);
     expect(getUserMedia).not.toHaveBeenCalled();
+    expect(displayAudioTrack.stop).toHaveBeenCalledTimes(1);
+    expect(displayVideoTrack.stop).toHaveBeenCalledTimes(1);
     expect(capture.liveSocketRef.current).toBeNull();
     expect(capture.result.current.isRecording).toBe(false);
     expect(capture.onRecordingStateChange).toHaveBeenLastCalledWith(false);

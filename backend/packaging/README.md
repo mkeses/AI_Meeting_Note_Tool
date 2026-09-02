@@ -76,3 +76,18 @@ The packaged backend binds only to `127.0.0.1`. Windows GPU/CUDA execution and
 installer integration are intentionally out of scope. CTranslate2's Windows
 wheel may require the Microsoft Visual C++ runtime on machines that do not
 already have it.
+
+## Package with Electron
+
+After building this Windows one-folder backend, package the Electron app from
+`frontend/` on Windows x64:
+
+```powershell
+npm run package:win
+```
+
+The package command validates this artifact first, then copies the complete
+`ai-meeting-note-backend` directory into the packaged app's
+`resources\backend\` directory. It writes the Windows app folder under
+`dist\windows-electron\`. Do not delete `_internal` or copy only the
+executable.
