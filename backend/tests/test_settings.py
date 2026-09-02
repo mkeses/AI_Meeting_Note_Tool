@@ -44,3 +44,33 @@ def test_settings_reports_all_missing_model_configuration(
 
     with pytest.raises(RuntimeError, match="WHISPER_MODEL, LLM_BASE_URL"):
         Settings.from_environment()
+
+
+def test_authentication_requires_postgresql_and_a_session_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHISPER_MODEL", "base.en")
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("LLM_MODEL", "gemma3:4b")
+    monkeypatch.setenv("AUTH_ENABLED", "1")
+    monkeypatch.delenv("AUTH_SESSION_SECRET", raising=False)
+
+    with pytest.raises(RuntimeError, match="AUTH_ENABLED requires"):
+        Settings.from_environment()
+
+
+def test_remote_authentication_configuration_is_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHISPER_MODEL", "base.en")
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("LLM_MODEL", "gemma3:4b")
+    monkeypatch.setenv("MEETING_STORAGE_BACKEND", "postgresql")
+    monkeypatch.setenv("POSTGRES_DATABASE_URL", "postgresql://test")
+    monkeypatch.setenv("AUTH_ENABLED", "1")
+    monkeypatch.setenv("AUTH_SESSION_SECRET", "s" * 32)
+
+    settings = Settings.from_environment()
+
+    assert settings.auth_enabled is True
+    assert settings.auth_cookie_secure is True

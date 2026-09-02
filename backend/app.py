@@ -11,10 +11,12 @@ from typing import Annotated
 import numpy as np
 from dotenv import load_dotenv
 from fastapi import (
+    Depends,
     FastAPI,
     File,
     HTTPException,
     Query,
+    Request,
     Response,
     UploadFile,
     WebSocket,
@@ -24,15 +26,30 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from scipy.signal import resample_poly
 
+from auth import (
+    create_session_token,
+    hash_password,
+    hash_session_token,
+    session_expiration,
+    utc_now,
+    verify_password,
+)
+from auth_models import AuthenticatedUserResponse, AuthenticationRequest
 from meeting_models import MeetingCreate, MeetingResponse, MeetingUpdate
 from settings import Settings
 from storage import (
+    LOCAL_OWNER_ID,
+    AuthenticationStorageError,
+    AuthenticationStore,
     MeetingConflictError,
     MeetingStorageError,
     MeetingStore,
+    UserConflictError,
+    create_authentication_store,
     create_meeting_store,
 )
 from transcription import TranscriptionService
+from user_entity import User
 
 load_dotenv()
 
@@ -67,6 +84,8 @@ Word = dict[str, float | str]
 
 service: TranscriptionService | None = None
 meeting_repository: MeetingStore | None = None
+authentication_store: AuthenticationStore | None = None
+application_settings: Settings | None = None
 
 # --- Live transcription windowing constants ---
 
@@ -104,11 +123,12 @@ LIVE_VAD_PARAMETERS = {"min_speech_duration_ms": 100}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize the local Whisper and LLM-backed transcription service."""
-    global meeting_repository, service
+    global application_settings, authentication_store, meeting_repository, service
 
     print("Starting AI Transcript App...")
 
     settings = Settings.from_environment()
+    application_settings = settings
 
     service = TranscriptionService(
         whisper_model=settings.whisper_model,
@@ -118,6 +138,7 @@ async def lifespan(app: FastAPI):
     )
     meeting_repository = create_meeting_store(settings)
     meeting_repository.initialize()
+    authentication_store = create_authentication_store(settings, meeting_repository)
 
     print("Ready!")
 
@@ -126,6 +147,8 @@ async def lifespan(app: FastAPI):
     finally:
         meeting_repository = None
         service = None
+        authentication_store = None
+        application_settings = None
 
 
 app = FastAPI(title="AI Transcript App", lifespan=lifespan)
@@ -156,6 +179,18 @@ def get_meeting_repository() -> MeetingStore:
     return meeting_repository
 
 
+def get_application_settings() -> Settings:
+    if application_settings is None:
+        raise HTTPException(status_code=503, detail="Service not ready")
+    return application_settings
+
+
+def get_authentication_store() -> AuthenticationStore:
+    if authentication_store is None:
+        raise HTTPException(status_code=404, detail="Authentication is not enabled")
+    return authentication_store
+
+
 def raise_storage_http_error(error: MeetingStorageError) -> None:
     print(f"Meeting storage error: {error}")
     raise HTTPException(
@@ -163,10 +198,128 @@ def raise_storage_http_error(error: MeetingStorageError) -> None:
     ) from error
 
 
-@app.get("/api/meetings", response_model=list[MeetingResponse])
-def list_meetings() -> list[MeetingResponse]:
+def raise_authentication_storage_http_error(error: AuthenticationStorageError) -> None:
+    print(f"Authentication storage error: {error}")
+    raise HTTPException(
+        status_code=503, detail="Authentication storage is unavailable"
+    ) from error
+
+
+def get_current_user(request: Request) -> User:
+    settings = get_application_settings()
+    if not settings.auth_enabled:
+        raise HTTPException(status_code=404, detail="Authentication is not enabled")
+
+    token = request.cookies.get(settings.auth_cookie_name)
+    if not token or not settings.auth_session_secret:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
     try:
-        meetings = get_meeting_repository().list()
+        user = get_authentication_store().get_user_by_session(
+            hash_session_token(token, settings.auth_session_secret), utc_now()
+        )
+    except AuthenticationStorageError as error:
+        raise_authentication_storage_http_error(error)
+
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
+
+
+def get_current_meeting_store(request: Request) -> MeetingStore:
+    settings = get_application_settings()
+    owner_id = get_current_user(request).id if settings.auth_enabled else LOCAL_OWNER_ID
+    return get_meeting_repository().for_owner(owner_id)
+
+
+CurrentMeetingStore = Annotated[MeetingStore, Depends(get_current_meeting_store)]
+
+
+@app.post(
+    "/api/auth/register",
+    response_model=AuthenticatedUserResponse,
+    status_code=201,
+)
+def register(
+    credentials: AuthenticationRequest,
+) -> AuthenticatedUserResponse:
+    try:
+        user = get_authentication_store().create_user(
+            credentials.login, hash_password(credentials.password)
+        )
+    except UserConflictError as error:
+        raise HTTPException(status_code=409, detail="Login already exists") from error
+    except AuthenticationStorageError as error:
+        raise_authentication_storage_http_error(error)
+
+    return AuthenticatedUserResponse.from_user(user)
+
+
+@app.post("/api/auth/login", response_model=AuthenticatedUserResponse)
+def login(
+    credentials: AuthenticationRequest,
+    response: Response,
+) -> AuthenticatedUserResponse:
+    try:
+        stored_user = get_authentication_store().get_user_by_login(credentials.login)
+    except AuthenticationStorageError as error:
+        raise_authentication_storage_http_error(error)
+
+    if stored_user is None or not verify_password(credentials.password, stored_user[1]):
+        raise HTTPException(status_code=401, detail="Invalid login or password")
+
+    settings = get_application_settings()
+    assert settings.auth_session_secret is not None
+    token = create_session_token()
+    expires_at = session_expiration(utc_now(), settings.auth_session_lifetime_seconds)
+    try:
+        get_authentication_store().create_session(
+            stored_user[0].id,
+            hash_session_token(token, settings.auth_session_secret),
+            expires_at,
+        )
+    except AuthenticationStorageError as error:
+        raise_authentication_storage_http_error(error)
+
+    response.set_cookie(
+        key=settings.auth_cookie_name,
+        value=token,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite="lax",
+        max_age=settings.auth_session_lifetime_seconds,
+        path="/",
+    )
+    return AuthenticatedUserResponse.from_user(stored_user[0])
+
+
+@app.post("/api/auth/logout", status_code=204)
+def logout(request: Request, response: Response) -> None:
+    settings = get_application_settings()
+    if not settings.auth_enabled:
+        raise HTTPException(status_code=404, detail="Authentication is not enabled")
+    token = request.cookies.get(settings.auth_cookie_name)
+    if token and settings.auth_session_secret:
+        try:
+            get_authentication_store().delete_session(
+                hash_session_token(token, settings.auth_session_secret)
+            )
+        except AuthenticationStorageError as error:
+            raise_authentication_storage_http_error(error)
+    response.delete_cookie(key=settings.auth_cookie_name, path="/")
+
+
+@app.get("/api/auth/me", response_model=AuthenticatedUserResponse)
+def get_authenticated_user(request: Request) -> AuthenticatedUserResponse:
+    return AuthenticatedUserResponse.from_user(get_current_user(request))
+
+
+@app.get("/api/meetings", response_model=list[MeetingResponse])
+def list_meetings(
+    meeting_store: CurrentMeetingStore,
+) -> list[MeetingResponse]:
+    try:
+        meetings = meeting_store.list()
     except MeetingStorageError as error:
         raise_storage_http_error(error)
 
@@ -174,9 +327,12 @@ def list_meetings() -> list[MeetingResponse]:
 
 
 @app.post("/api/meetings", response_model=MeetingResponse, status_code=201)
-def create_meeting(meeting: MeetingCreate) -> MeetingResponse:
+def create_meeting(
+    meeting: MeetingCreate,
+    meeting_store: CurrentMeetingStore,
+) -> MeetingResponse:
     try:
-        created_meeting = get_meeting_repository().create(meeting.to_record())
+        created_meeting = meeting_store.create(meeting.to_record())
     except MeetingConflictError as error:
         raise HTTPException(status_code=409, detail="Meeting already exists") from error
     except MeetingStorageError as error:
@@ -187,13 +343,14 @@ def create_meeting(meeting: MeetingCreate) -> MeetingResponse:
 
 @app.get("/api/meetings/search", response_model=list[MeetingResponse])
 def search_meetings(
-    q: str = Query(default="", max_length=256)
+    meeting_store: CurrentMeetingStore,
+    q: str = Query(default="", max_length=256),
 ) -> list[MeetingResponse]:
     if not q.strip():
         return []
 
     try:
-        meetings = get_meeting_repository().search(q)
+        meetings = meeting_store.search(q)
     except MeetingStorageError as error:
         raise_storage_http_error(error)
 
@@ -201,9 +358,12 @@ def search_meetings(
 
 
 @app.get("/api/meetings/{meeting_id}", response_model=MeetingResponse)
-def get_meeting(meeting_id: str) -> MeetingResponse:
+def get_meeting(
+    meeting_id: str,
+    meeting_store: CurrentMeetingStore,
+) -> MeetingResponse:
     try:
-        meeting = get_meeting_repository().get(meeting_id)
+        meeting = meeting_store.get(meeting_id)
     except MeetingStorageError as error:
         raise_storage_http_error(error)
 
@@ -213,13 +373,17 @@ def get_meeting(meeting_id: str) -> MeetingResponse:
 
 
 @app.patch("/api/meetings/{meeting_id}", response_model=MeetingResponse)
-def update_meeting(meeting_id: str, update: MeetingUpdate) -> MeetingResponse:
+def update_meeting(
+    meeting_id: str,
+    update: MeetingUpdate,
+    meeting_store: CurrentMeetingStore,
+) -> MeetingResponse:
     changes = update.to_changes()
     if not changes:
         raise HTTPException(status_code=422, detail="At least one field is required")
 
     try:
-        meeting = get_meeting_repository().update(meeting_id, changes)
+        meeting = meeting_store.update(meeting_id, changes)
     except MeetingConflictError as error:
         raise HTTPException(status_code=409, detail="Meeting already exists") from error
     except MeetingStorageError as error:
@@ -231,9 +395,12 @@ def update_meeting(meeting_id: str, update: MeetingUpdate) -> MeetingResponse:
 
 
 @app.delete("/api/meetings/{meeting_id}", status_code=204)
-def delete_meeting(meeting_id: str) -> Response:
+def delete_meeting(
+    meeting_id: str,
+    meeting_store: CurrentMeetingStore,
+) -> Response:
     try:
-        deleted = get_meeting_repository().delete(meeting_id)
+        deleted = meeting_store.delete(meeting_id)
     except MeetingStorageError as error:
         raise_storage_http_error(error)
 

@@ -510,6 +510,30 @@ cd backend
 POSTGRES_TEST_DATABASE_URL=postgresql://user:password@host:5432/meeting_notes uv run --extra postgres pytest tests/test_postgres_storage.py
 ```
 
+### Remote authentication
+
+Authentication is disabled by default, so the existing local browser and
+Electron workflows continue to use SQLite without login. Remote authentication
+requires PostgreSQL and an environment-provided session secret:
+
+```bash
+cd backend
+uv sync --extra postgres --extra auth --extra dev
+```
+
+```env
+MEETING_STORAGE_BACKEND=postgresql
+POSTGRES_DATABASE_URL=postgresql://user:password@host:5432/meeting_notes
+AUTH_ENABLED=1
+AUTH_SESSION_SECRET=replace-with-a-random-secret-at-least-32-characters-long
+AUTH_COOKIE_SECURE=1
+```
+
+The backend stores Argon2 password hashes and only HMAC hashes of opaque
+session tokens. Login sets an HttpOnly, SameSite=Lax cookie. Set
+`AUTH_COOKIE_SECURE=0` only for an HTTPS-free local remote-auth development
+environment; production deployments should retain the secure-cookie default.
+
 ---
 
 ## Development

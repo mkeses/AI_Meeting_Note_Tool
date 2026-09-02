@@ -44,10 +44,24 @@ def test_postgresql_storage_is_selected_when_configured(
     monkeypatch.setenv(
         "POSTGRES_DATABASE_URL", "postgresql://user:password@localhost:5432/notes"
     )
+    monkeypatch.setenv("AUTH_ENABLED", "1")
+    monkeypatch.setenv("AUTH_SESSION_SECRET", "s" * 32)
 
     settings = Settings.from_environment()
 
     assert isinstance(create_meeting_store(settings), PostgresMeetingRepository)
+
+
+def test_postgresql_storage_requires_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_required_model_configuration(monkeypatch)
+    monkeypatch.setenv("MEETING_STORAGE_BACKEND", "postgresql")
+    monkeypatch.setenv("POSTGRES_DATABASE_URL", "postgresql://test")
+    monkeypatch.delenv("AUTH_ENABLED", raising=False)
+
+    with pytest.raises(RuntimeError, match="requires AUTH_ENABLED=1"):
+        Settings.from_environment()
 
 
 def test_storage_backend_must_be_supported(monkeypatch: pytest.MonkeyPatch) -> None:

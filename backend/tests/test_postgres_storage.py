@@ -1,8 +1,10 @@
 import os
+from uuid import uuid4
 
 import pytest
 
 from postgres_database import PostgresMeetingRepository
+from storage import UserConflictError
 from tests.meeting_store_contract import assert_meeting_store_contract
 
 
@@ -13,4 +15,10 @@ def test_postgres_repository_implements_the_meeting_store_contract() -> None:
         pytest.skip("POSTGRES_TEST_DATABASE_URL is not configured")
 
     pytest.importorskip("psycopg")
-    assert_meeting_store_contract(PostgresMeetingRepository(database_url))
+    repository = PostgresMeetingRepository(database_url)
+    repository.initialize()
+    login = f"contract-test-{uuid4().hex}"
+    user = repository.create_user(login, "not-used-for-login")
+    with pytest.raises(UserConflictError):
+        repository.create_user(login, "another-password-hash")
+    assert_meeting_store_contract(repository.for_owner(user.id))
