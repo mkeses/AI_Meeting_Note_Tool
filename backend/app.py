@@ -30,6 +30,25 @@ from transcription import TranscriptionService
 
 load_dotenv()
 
+VITE_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+]
+ELECTRON_RENDERER_ORIGIN = "meeting://renderer"
+
+
+def get_allowed_cors_origins() -> list[str]:
+    """Return browser origins allowed to call the local API."""
+    origins = [*VITE_CORS_ORIGINS]
+
+    if (
+        os.getenv("ELECTRON_DESKTOP_MODE") == "1"
+        and os.getenv("ELECTRON_RENDERER_ORIGIN") == ELECTRON_RENDERER_ORIGIN
+    ):
+        origins.append(ELECTRON_RENDERER_ORIGIN)
+
+    return origins
+
 
 class CleanRequest(BaseModel):
     text: str
@@ -127,10 +146,7 @@ app = FastAPI(title="AI Transcript App", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-    ],
+    allow_origins=get_allowed_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
