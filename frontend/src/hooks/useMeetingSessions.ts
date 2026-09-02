@@ -41,6 +41,17 @@ type OpenedSession = {
   notes: string;
 };
 
+type UseMeetingSessionsOptions = {
+  enabled?: boolean;
+  onUnauthenticated?: () => void;
+};
+
+class UnauthenticatedMeetingRequestError extends Error {
+  constructor() {
+    super('Your session has expired. Sign in to continue.');
+  }
+}
+
 const meetingTypes: MeetingType[] = [
   'general',
   'design_review',
@@ -106,9 +117,15 @@ function parseSavedSessions(value: unknown): SavedSession[] {
 
 async function fetchMeetingJson(
   url: string,
-  init?: RequestInit
+  init?: RequestInit,
+  onUnauthenticated?: () => void
 ): Promise<unknown> {
-  const response = await fetch(url, init);
+  const response = await fetch(url, { ...init, credentials: 'include' });
+
+  if (response.status === 401) {
+    onUnauthenticated?.();
+    throw new UnauthenticatedMeetingRequestError();
+  }
 
   if (!response.ok) {
     throw new Error(`Request failed with status ${response.status}`);
@@ -142,7 +159,10 @@ function formatRequestError(action: string, error: unknown): string {
  * Existing browser localStorage data is deliberately left untouched for a later
  * migration/import step.
  */
-export function useMeetingSessions() {
+export function useMeetingSessions({
+  enabled = true,
+  onUnauthenticated,
+}: UseMeetingSessionsOptions = {}) {
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -151,13 +171,25 @@ export function useMeetingSessions() {
   useEffect(() => {
     let mounted = true;
 
+    if (!enabled) {
+      setSavedSessions([]);
+      setError(null);
+      setIsLoading(false);
+
+      return () => {
+        mounted = false;
+      };
+    }
+
     const loadSessions = async () => {
       setIsLoading(true);
       setError(null);
 
       try {
         const response = await fetchMeetingJson(
-          getBackendApiUrl('/api/meetings')
+          getBackendApiUrl('/api/meetings'),
+          undefined,
+          onUnauthenticated
         );
         const loadedSessions = parseSavedSessions(response);
 
@@ -184,7 +216,7 @@ export function useMeetingSessions() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [enabled, onUnauthenticated]);
 
   const openSavedSession = useCallback(
     (
@@ -213,6 +245,10 @@ export function useMeetingSessions() {
 
   const searchSessions = useCallback(
     async (query: string): Promise<SavedSession[] | null> => {
+      if (!enabled) {
+        return null;
+      }
+
       const normalizedQuery = query.trim();
       if (!normalizedQuery) {
         return [];
@@ -222,7 +258,9 @@ export function useMeetingSessions() {
         const response = await fetchMeetingJson(
           getBackendApiUrl(
             `/api/meetings/search?q=${encodeURIComponent(normalizedQuery)}`
-          )
+          ),
+          undefined,
+          onUnauthenticated
         );
         const sessions = parseSavedSessions(response);
 
@@ -234,7 +272,7 @@ export function useMeetingSessions() {
         return null;
       }
     },
-    []
+    [enabled, onUnauthenticated]
   );
 
   const saveSession = useCallback(
@@ -245,7 +283,7 @@ export function useMeetingSessions() {
       cleanedText: string | null,
       meetingType: MeetingType
     ): Promise<string | null> => {
-      if (!activeSessionId) {
+      if (!enabled || !activeSessionId) {
         return null;
       }
 
@@ -287,7 +325,8 @@ export function useMeetingSessions() {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify(changes),
-          }
+          },
+          onUnauthenticated
         );
         const updatedSession = parseSavedSession(response);
 
@@ -306,7 +345,7 @@ export function useMeetingSessions() {
         return null;
       }
     },
-    [savedSessions]
+    [enabled, onUnauthenticated, savedSessions]
   );
 
   const saveNotes = useCallback(
@@ -314,7 +353,7 @@ export function useMeetingSessions() {
       activeSessionId: string | null,
       notes: string
     ): Promise<SavedSession | null> => {
-      if (!activeSessionId) {
+      if (!enabled || !activeSessionId) {
         return null;
       }
 
@@ -333,7 +372,8 @@ export function useMeetingSessions() {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({ notes }),
-          }
+          },
+          onUnauthenticated
         );
         const updatedSession = parseSavedSession(response);
 
@@ -359,11 +399,15 @@ export function useMeetingSessions() {
         return null;
       }
     },
-    []
+    [enabled, onUnauthenticated]
   );
 
   const addSession = useCallback(
     async (newSession: NewSavedSession): Promise<AddSessionResult | null> => {
+      if (!enabled) {
+        return null;
+      }
+
       const existingSession = savedSessions.find(
         (session) => session.sourceKey === newSession.sourceKey
       );
@@ -387,7 +431,8 @@ export function useMeetingSessions() {
                 sourceType: newSession.sourceType,
                 notes: newSession.notes,
               }),
-            }
+            },
+            onUnauthenticated
           );
           const updatedSession = parseSavedSession(response);
 
@@ -411,7 +456,8 @@ export function useMeetingSessions() {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify(newSession),
-          }
+          },
+          onUnauthenticated
         );
         const createdSession = parseSavedSession(response);
 
@@ -430,7 +476,7 @@ export function useMeetingSessions() {
         return null;
       }
     },
-    [savedSessions]
+    [enabled, onUnauthenticated, savedSessions]
   );
 
   const deleteSession = useCallback(
@@ -440,13 +486,23 @@ export function useMeetingSessions() {
       wasActive: boolean;
       activeSessionId: string | null;
     } | null> => {
+      if (!enabled) {
+        return null;
+      }
+
       try {
         const response = await fetch(
           getBackendApiUrl(`/api/meetings/${encodeURIComponent(sessionId)}`),
           {
             method: 'DELETE',
+            credentials: 'include',
           }
         );
+
+        if (response.status === 401) {
+          onUnauthenticated?.();
+          throw new UnauthenticatedMeetingRequestError();
+        }
 
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
@@ -463,7 +519,7 @@ export function useMeetingSessions() {
         return null;
       }
     },
-    []
+    [enabled, onUnauthenticated]
   );
 
   return {

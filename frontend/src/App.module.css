@@ -63,6 +63,15 @@
   gap: 10px;
 }
 
+.accountName {
+  max-width: 180px;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: 0.88rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .statusPill {
   display: inline-flex;
   align-items: center;

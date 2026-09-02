@@ -39,6 +39,9 @@ describe('useTranscriptCleanup', () => {
 
     expect(result.current.systemPrompt).toBe('Test prompt');
     expect(result.current.defaultSystemPrompt).toBe('Test prompt');
+    expect(fetchMock).toHaveBeenCalledWith('/api/system-prompt', {
+      credentials: 'include',
+    });
   });
 
   it('does not call /api/clean when useLLM is false', async () => {
@@ -99,6 +102,7 @@ describe('useTranscriptCleanup', () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/clean', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text: 'Raw text',
@@ -283,6 +287,7 @@ describe('useTranscriptCleanup', () => {
       2,
       '/api/clean',
       expect.objectContaining({
+        credentials: 'include',
         body: JSON.stringify({
           text: 'First raw text',
           system_prompt: 'Test prompt',
@@ -294,6 +299,7 @@ describe('useTranscriptCleanup', () => {
       3,
       '/api/clean',
       expect.objectContaining({
+        credentials: 'include',
         body: JSON.stringify({
           text: 'Second raw text',
           system_prompt: 'Test prompt',

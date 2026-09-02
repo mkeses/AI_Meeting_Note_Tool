@@ -25,6 +25,21 @@ const meetingReportState = vi.hoisted(() => ({
   downloadMeetingReportPdf: vi.fn(() => Promise.resolve()),
 }));
 
+const authState = vi.hoisted(() => ({
+  value: {
+    status: 'local' as 'local' | 'authenticated',
+    user: null as { login: string } | null,
+    error: null,
+    message: null,
+    isSubmitting: false,
+    login: vi.fn(() => Promise.resolve(true)),
+    register: vi.fn(() => Promise.resolve(true)),
+    logout: vi.fn(() => Promise.resolve()),
+    refresh: vi.fn(() => Promise.resolve()),
+    handleUnauthenticated: vi.fn(),
+  },
+}));
+
 const fetchMock = vi.hoisted(() => vi.fn<typeof fetch>());
 
 vi.mock('./hooks/useAudioCapture', async () => {
@@ -80,6 +95,10 @@ vi.mock('./hooks/useTranscriptCleanup', () => ({
 
 vi.mock('./lib/meetingReportPdf', () => ({
   downloadMeetingReportPdf: meetingReportState.downloadMeetingReportPdf,
+}));
+
+vi.mock('./hooks/useAuth', () => ({
+  useAuth: () => authState.value,
 }));
 
 import App from './App';
@@ -168,6 +187,9 @@ describe('App live transcript editor', () => {
     cleanupState.cleanTranscription.mockClear();
     cleanupState.regenerateCleanup.mockClear();
     meetingReportState.downloadMeetingReportPdf.mockClear();
+    authState.value.status = 'local';
+    authState.value.user = null;
+    authState.value.logout.mockClear();
     fetchMock.mockReset();
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify([]), {
@@ -286,6 +308,83 @@ describe('App live transcript editor', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('keeps the authenticated workspace shell while hiding capture controls', async () => {
+    authState.value.status = 'authenticated';
+    authState.value.user = { login: 'matth' };
+    const session = createSession();
+    fetchMock.mockResolvedValueOnce(jsonResponse([session]));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /^architecture review/i });
+
+    expect(
+      screen.getByRole('button', { name: 'New session' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('navigation', { name: 'Workspace' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Current transcript' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('textbox', { name: 'Search saved meetings' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'Review your meeting' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'Meeting workspace' })
+    ).toBeInTheDocument();
+    expect(screen.getByText('Processing setup')).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole('button', { name: /^architecture review/i })
+    );
+    expect(screen.getByRole('textbox', { name: 'Meeting title' })).toHaveValue(
+      session.filename
+    );
+    expect(screen.getByRole('textbox', { name: 'Meeting notes' })).toHaveValue(
+      session.notes
+    );
+
+    const searchResult = createSession({
+      id: 'remote-search-result',
+      sourceKey: 'text:remote-search-result',
+      filename: 'Remote search result',
+      sourceType: 'text',
+    });
+    fetchMock.mockResolvedValueOnce(jsonResponse([searchResult]));
+    const searchInput = screen.getByRole('textbox', {
+      name: 'Search saved meetings',
+    });
+    await user.type(searchInput, 'remote');
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByRole('button', { name: /^remote search result/i });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/meetings/search?q=remote',
+      { credentials: 'include' }
+    );
+
+    expect(
+      screen.queryByRole('button', { name: 'Start recording' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Upload audio file' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Use an existing text transcript')
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('switch', { name: 'Include microphone' })
+    ).not.toBeInTheDocument();
+    expect(screen.getByText('Private workspace')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    expect(authState.value.logout).toHaveBeenCalledOnce();
+  });
+
   it('exports a PDF using the active saved meeting data', async () => {
     const user = userEvent.setup();
     const session = createSession({
@@ -337,6 +436,7 @@ describe('App live transcript editor', () => {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename: updatedSession.filename }),
+        credentials: 'include',
       });
     });
     expect(title).toHaveValue(updatedSession.filename);
@@ -349,7 +449,11 @@ describe('App live transcript editor', () => {
     let createdSession: SavedSession | null = null;
     cleanupState.cleanTranscription.mockResolvedValueOnce(cleanedText);
     fetchMock.mockImplementation((url, init) => {
-      if (url === '/api/meetings' && init === undefined) {
+      if (
+        url === '/api/meetings' &&
+        init?.credentials === 'include' &&
+        !init.method
+      ) {
         return Promise.resolve(jsonResponse([]));
       }
 
@@ -482,6 +586,7 @@ describe('App live transcript editor', () => {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ notes: 'Local notes edit' }),
+      credentials: 'include',
     });
     expect(notes).toHaveValue('Local notes edit');
   });
@@ -516,7 +621,11 @@ describe('App live transcript editor', () => {
     let createdSession: SavedSession | null = null;
     let createdSessionId = '';
     fetchMock.mockImplementation((url, init) => {
-      if (url === '/api/meetings' && init === undefined) {
+      if (
+        url === '/api/meetings' &&
+        init?.credentials === 'include' &&
+        !init.method
+      ) {
         return Promise.resolve(jsonResponse([]));
       }
 
@@ -591,6 +700,7 @@ describe('App live transcript editor', () => {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes: 'Follow up with the platform team.' }),
+        credentials: 'include',
       }
     );
 
@@ -628,7 +738,11 @@ describe('App live transcript editor', () => {
     let createdSession: SavedSession | null = null;
     let createdSessionId = '';
     fetchMock.mockImplementation((url, init) => {
-      if (url === '/api/meetings' && init === undefined) {
+      if (
+        url === '/api/meetings' &&
+        init?.credentials === 'include' &&
+        !init.method
+      ) {
         return Promise.resolve(jsonResponse([]));
       }
 
@@ -667,7 +781,7 @@ describe('App live transcript editor', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         `/api/meetings/${createdSessionId}`,
-        { method: 'DELETE' }
+        { method: 'DELETE', credentials: 'include' }
       );
     });
   });
@@ -704,7 +818,7 @@ describe('App live transcript editor', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenLastCalledWith(
         '/api/meetings/search?q=architecture',
-        undefined
+        { credentials: 'include' }
       );
     });
 

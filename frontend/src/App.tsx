@@ -14,6 +14,7 @@ import { TranscriptionResults } from './components/TranscriptionResults';
 import { UploadZone } from './components/UploadZone';
 import liveStyles from './liveTranscript.module.css';
 import { SettingsPanel } from './components/SettingsPanel';
+import { AuthScreen } from './components/AuthScreen';
 import { useTranscriptCleanup } from './hooks/useTranscriptCleanup';
 import { useMeetingSessions } from './hooks/useMeetingSessions';
 import { useAudioCapture } from './hooks/useAudioCapture';
@@ -26,6 +27,7 @@ import type {
 import { usePushToTalk } from './hooks/usePushToTalk';
 import { downloadMeetingReportPdf } from './lib/meetingReportPdf';
 import { getBackendApiUrl } from './config';
+import { useAuth } from './hooks/useAuth';
 
 interface TranscriptionResponse {
   success: boolean;
@@ -103,6 +105,10 @@ function formatSessionDate(createdAt: string): string {
 }
 
 function App() {
+  const auth = useAuth();
+  const canUseWorkspace =
+    auth.status === 'local' || auth.status === 'authenticated';
+  const isRemoteWorkspace = auth.status === 'authenticated';
   const [isProcessing, setIsProcessing] = useState(false);
   const [rawText, setRawText] = useState<string | null>(null);
   const [editedRawText, setEditedRawText] = useState('');
@@ -171,7 +177,10 @@ function App() {
     stopRecording: audioStopRecording,
   } = audioCapture;
 
-  const sessions = useMeetingSessions();
+  const sessions = useMeetingSessions({
+    enabled: canUseWorkspace,
+    onUnauthenticated: auth.handleUnauthenticated,
+  });
 
   const {
     savedSessions,
@@ -618,6 +627,7 @@ function App() {
         const response = await fetch(getBackendApiUrl('/api/transcribe'), {
           method: 'POST',
           body: formData,
+          credentials: 'include',
         });
 
         if (!response.ok) {
@@ -824,7 +834,9 @@ function App() {
     ? 'Recording'
     : isProcessing || isCleaningWithLLM
       ? 'Processing'
-      : 'Ready to record';
+      : isRemoteWorkspace
+        ? 'Workspace ready'
+        : 'Ready to record';
 
   const handleNewSession = () => {
     if (audioIsRecording || isProcessing) {
@@ -846,6 +858,21 @@ function App() {
     setSessionFilename(null);
     setSessionInputType(null);
   };
+
+  if (!canUseWorkspace) {
+    return (
+      <AuthScreen
+        error={auth.error}
+        message={auth.message}
+        isSubmitting={auth.isSubmitting}
+        onLogin={auth.login}
+        onRegister={auth.register}
+        onRetry={() => void auth.refresh()}
+        unavailable={auth.status === 'unavailable'}
+        checking={auth.status === 'checking'}
+      />
+    );
+  }
 
   return (
     <div className={styles.app}>
@@ -869,6 +896,18 @@ function App() {
               <span className={styles.statusDot} />
               {statusText}
             </div>
+            {isRemoteWorkspace && (
+              <>
+                <span className={styles.accountName}>{auth.user?.login}</span>
+                <button
+                  className={styles.settingsButton}
+                  type="button"
+                  onClick={() => void auth.logout()}
+                >
+                  Sign out
+                </button>
+              </>
+            )}
             <button
               className={styles.settingsButton}
               type="button"
@@ -1050,66 +1089,72 @@ function App() {
             </nav>
 
             <div className={styles.localStatus}>
-              <strong>Local processing</strong>
+              <strong>
+                {isRemoteWorkspace ? 'Private workspace' : 'Local processing'}
+              </strong>
               <br />
-              Whisper + OpenAI-compatible LLM
+              {isRemoteWorkspace
+                ? 'Your account can access its own meetings.'
+                : 'Whisper + OpenAI-compatible LLM'}
             </div>
           </aside>
 
           <main className={styles.workspace}>
-            <section className={`${styles.card} ${styles.captureCard}`}>
-              <div className={styles.cardHeader}>
-                <div>
-                  <h1 className={styles.cardTitle}>Capture a meeting</h1>
-                  <p className={styles.cardDescription}>
-                    Record your computer and microphone audio, or upload an
-                    existing file.
-                  </p>
-                </div>
-              </div>
-
-              <div className={styles.captureContent}>
-                <div className={styles.recordArea}>
-                  <RecordButton
-                    isRecording={audioIsRecording}
-                    isProcessing={isProcessing}
-                    onStartRecording={startRecording}
-                    onStopRecording={stopRecording}
-                  />
-                  {audioIsRecording && (
-                    <div className={styles.recordingTimer} aria-live="polite">
-                      <span className={styles.recordingIndicator} />
-                      {formatDuration(recordingSeconds)}
-                    </div>
-                  )}
+            {!isRemoteWorkspace && (
+              <section className={`${styles.card} ${styles.captureCard}`}>
+                <div className={styles.cardHeader}>
+                  <div>
+                    <h1 className={styles.cardTitle}>Capture a meeting</h1>
+                    <p className={styles.cardDescription}>
+                      Record your computer and microphone audio, or upload an
+                      existing file.
+                    </p>
+                  </div>
                 </div>
 
-                <div className={styles.uploadArea}>
-                  <UploadZone
-                    isProcessing={isProcessing}
-                    isDragging={isDragging}
-                    onFileSelect={handleFileSelect}
-                    onDragEnter={handleDragEnter}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                    fileInputRef={fileInputRef}
-                  />
-                </div>
-              </div>
+                <div className={styles.captureContent}>
+                  <div className={styles.recordArea}>
+                    <RecordButton
+                      isRecording={audioIsRecording}
+                      isProcessing={isProcessing}
+                      onStartRecording={startRecording}
+                      onStopRecording={stopRecording}
+                    />
+                    {audioIsRecording && (
+                      <div className={styles.recordingTimer} aria-live="polite">
+                        <span className={styles.recordingIndicator} />
+                        {formatDuration(recordingSeconds)}
+                      </div>
+                    )}
+                  </div>
 
-              <details className={styles.textInputDetails}>
-                <summary className={styles.promptToggle}>
-                  Use an existing text transcript
-                  <span aria-hidden="true">⌄</span>
-                </summary>
-                <div className={styles.textInputContent}>
-                  <TextInputZone
-                    isProcessing={isProcessing}
-                    onTextSubmit={handleTextSubmit}
-                  />
+                  <div className={styles.uploadArea}>
+                    <UploadZone
+                      isProcessing={isProcessing}
+                      isDragging={isDragging}
+                      onFileSelect={handleFileSelect}
+                      onDragEnter={handleDragEnter}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                      fileInputRef={fileInputRef}
+                    />
+                  </div>
                 </div>
-              </details>
-            </section>
+
+                <details className={styles.textInputDetails}>
+                  <summary className={styles.promptToggle}>
+                    Use an existing text transcript
+                    <span aria-hidden="true">⌄</span>
+                  </summary>
+                  <div className={styles.textInputContent}>
+                    <TextInputZone
+                      isProcessing={isProcessing}
+                      onTextSubmit={handleTextSubmit}
+                    />
+                  </div>
+                </details>
+              </section>
+            )}
 
             <section className={`${styles.card} ${styles.configCard}`}>
               <div className={styles.cardHeader}>
@@ -1168,29 +1213,35 @@ function App() {
                 </div>
               </div>
 
-              <div className={styles.setupDivider} />
-              <div className={styles.cleanupRow}>
-                <div>
-                  <div className={styles.configLabel}>Include microphone</div>
-                  <div className={styles.configHint}>
-                    Capture your microphone together with the selected desktop
-                    audio.
+              {!isRemoteWorkspace && (
+                <>
+                  <div className={styles.setupDivider} />
+                  <div className={styles.cleanupRow}>
+                    <div>
+                      <div className={styles.configLabel}>
+                        Include microphone
+                      </div>
+                      <div className={styles.configHint}>
+                        Capture your microphone together with the selected
+                        desktop audio.
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={includeMicrophone}
+                      aria-label="Include microphone"
+                      className={`${styles.switch} ${
+                        includeMicrophone ? styles.switchOn : ''
+                      }`}
+                      onClick={() => setIncludeMicrophone((value) => !value)}
+                      disabled={audioIsRecording || isProcessing}
+                    >
+                      <span className={styles.switchThumb} />
+                    </button>
                   </div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={includeMicrophone}
-                  aria-label="Include microphone"
-                  className={`${styles.switch} ${
-                    includeMicrophone ? styles.switchOn : ''
-                  }`}
-                  onClick={() => setIncludeMicrophone((value) => !value)}
-                  disabled={audioIsRecording || isProcessing}
-                >
-                  <span className={styles.switchThumb} />
-                </button>
-              </div>
+                </>
+              )}
 
               <div className={styles.setupDivider} />
               <div className={styles.cleanupRow}>
@@ -1305,59 +1356,60 @@ function App() {
                 </div>
               </div>
 
-              {(audioIsRecording || liveCommittedText || livePartialText) && (
-                <div className={liveStyles.liveTranscript} aria-live="polite">
-                  <div className={liveStyles.header}>
-                    <div className={liveStyles.title}>Live transcript</div>
+              {!isRemoteWorkspace &&
+                (audioIsRecording || liveCommittedText || livePartialText) && (
+                  <div className={liveStyles.liveTranscript} aria-live="polite">
+                    <div className={liveStyles.header}>
+                      <div className={liveStyles.title}>Live transcript</div>
+                      {audioIsRecording && (
+                        <div className={liveStyles.status}>Listening…</div>
+                      )}
+                      {isLiveTranscriptEdited && (
+                        <div className={liveStyles.status}>Edited</div>
+                      )}
+                    </div>
+
+                    <div className={liveStyles.transcriptLine}>
+                      <textarea
+                        ref={liveTextareaRef}
+                        value={liveCommittedText}
+                        onChange={handleTextareaChange}
+                        onSelect={rememberTextareaSelection}
+                        onClick={rememberTextareaSelection}
+                        onKeyUp={rememberTextareaSelection}
+                        onFocus={rememberTextareaSelection}
+                        rows={4}
+                        aria-label="Committed live transcript"
+                        className={liveStyles.committedEditor}
+                      />
+
+                      {livePartialText && (
+                        <span
+                          className={liveStyles.partialText}
+                          aria-label="Provisional text, still being transcribed"
+                        >
+                          {liveCommittedText ? ' ' : ''}
+                          {livePartialText}
+                        </span>
+                      )}
+                    </div>
+
+                    {!liveCommittedText &&
+                      !livePartialText &&
+                      audioIsRecording && (
+                        <div className={liveStyles.emptyText}>
+                          Waiting for speech…
+                        </div>
+                      )}
+
                     {audioIsRecording && (
-                      <div className={liveStyles.status}>Listening…</div>
-                    )}
-                    {isLiveTranscriptEdited && (
-                      <div className={liveStyles.status}>Edited</div>
-                    )}
-                  </div>
-
-                  <div className={liveStyles.transcriptLine}>
-                    <textarea
-                      ref={liveTextareaRef}
-                      value={liveCommittedText}
-                      onChange={handleTextareaChange}
-                      onSelect={rememberTextareaSelection}
-                      onClick={rememberTextareaSelection}
-                      onKeyUp={rememberTextareaSelection}
-                      onFocus={rememberTextareaSelection}
-                      rows={4}
-                      aria-label="Committed live transcript"
-                      className={liveStyles.committedEditor}
-                    />
-
-                    {livePartialText && (
-                      <span
-                        className={liveStyles.partialText}
-                        aria-label="Provisional text, still being transcribed"
-                      >
-                        {liveCommittedText ? ' ' : ''}
-                        {livePartialText}
-                      </span>
-                    )}
-                  </div>
-
-                  {!liveCommittedText &&
-                    !livePartialText &&
-                    audioIsRecording && (
-                      <div className={liveStyles.emptyText}>
-                        Waiting for speech…
+                      <div className={liveStyles.notice}>
+                        Faded text is still being transcribed and cannot be
+                        edited yet.
                       </div>
                     )}
-
-                  {audioIsRecording && (
-                    <div className={liveStyles.notice}>
-                      Faded text is still being transcribed and cannot be edited
-                      yet.
-                    </div>
-                  )}
-                </div>
-              )}
+                  </div>
+                )}
 
               <TranscriptionResults
                 rawText={rawText}

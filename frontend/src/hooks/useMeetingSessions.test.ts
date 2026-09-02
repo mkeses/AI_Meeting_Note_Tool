@@ -82,7 +82,9 @@ describe('useMeetingSessions', () => {
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/meetings', undefined);
+    expect(fetchMock).toHaveBeenCalledWith('/api/meetings', {
+      credentials: 'include',
+    });
     expect(result.current.savedSessions).toEqual([serverSession]);
     expect(localStorage.getItem('meeting-sessions')).toBe(legacySessions);
   });
@@ -127,7 +129,7 @@ describe('useMeetingSessions', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       '/api/meetings/search?q=architecture',
-      undefined
+      { credentials: 'include' }
     );
     expect(foundSessions).toEqual([searchResult]);
     expect(result.current.savedSessions).toEqual([loadedSession]);
@@ -188,6 +190,7 @@ describe('useMeetingSessions', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newSession),
+      credentials: 'include',
     });
     expect(result.current.savedSessions).toEqual([createdSession]);
   });
@@ -255,6 +258,7 @@ describe('useMeetingSessions', () => {
         cleanedText: '',
         meetingType: 'design_review',
       }),
+      credentials: 'include',
     });
     expect(result.current.savedSessions).toEqual([
       updatedSession,
@@ -289,6 +293,7 @@ describe('useMeetingSessions', () => {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filename: 'Renamed meeting' }),
+      credentials: 'include',
     });
     expect(result.current.savedSessions).toEqual([updatedSession]);
   });
@@ -351,6 +356,7 @@ describe('useMeetingSessions', () => {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ notes: 'Confirm the rollout date.' }),
+      credentials: 'include',
     });
     expect(savedSession).toEqual(updatedSession);
     expect(result.current.savedSessions).toEqual([updatedSession]);
@@ -526,6 +532,24 @@ describe('useMeetingSessions', () => {
     expect(result.current.savedSessions).toEqual([session]);
     expect(result.current.error).toBe(
       'Failed to delete meeting: Request failed with status 503'
+    );
+  });
+
+  it('returns to the authentication boundary when a meeting request is unauthorized', async () => {
+    const onUnauthenticated = vi.fn();
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ detail: 'Sign in required' }, 401)
+    );
+
+    const { result } = renderHook(() =>
+      useMeetingSessions({ onUnauthenticated })
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(onUnauthenticated).toHaveBeenCalledOnce();
+    expect(result.current.error).toBe(
+      'Failed to load saved meetings: Your session has expired. Sign in to continue.'
     );
   });
 

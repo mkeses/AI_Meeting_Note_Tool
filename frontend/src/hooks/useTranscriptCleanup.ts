@@ -25,7 +25,9 @@ export function useTranscriptCleanup({
 
     const loadPrompt = async () => {
       try {
-        const response = await fetch(getBackendApiUrl('/api/system-prompt'));
+        const response = await fetch(getBackendApiUrl('/api/system-prompt'), {
+          credentials: 'include',
+        });
 
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
@@ -70,6 +72,7 @@ export function useTranscriptCleanup({
       try {
         const response = await fetch(getBackendApiUrl('/api/clean'), {
           method: 'POST',
+          credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
           },

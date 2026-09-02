@@ -574,6 +574,21 @@ cross-origin frontend must send its session cookie with `credentials: 'include'`
 The local Vite and Electron renderer origins remain configured separately and
 continue to work without this setting.
 
+### Authenticated PWA workspace
+
+The frontend is installable as a small PWA shell. Its service worker caches only
+the application shell and static assets: it never caches `/api/` responses,
+meeting data, session cookies, or credentials. API calls use the existing
+`VITE_BACKEND_URL` configuration and include the HttpOnly session cookie; the
+Electron runtime origin continues to take precedence when it is present.
+
+When `AUTH_ENABLED=1`, the frontend checks `/api/auth/me` before loading the
+meeting workspace. Users can register, sign in, and sign out without storing a
+token in JavaScript or browser storage. A `401` from a meeting request returns
+the user to sign-in. Remote workspace mode intentionally omits recording,
+audio upload, text transcription, and live transcription controls; those are
+planned for a later phase.
+
 ---
 
 ## Development

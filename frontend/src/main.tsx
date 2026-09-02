@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
+import { registerPwa } from './pwa';
 
 const rootElement = document.getElementById('root');
 
@@ -14,3 +15,5 @@ ReactDOM.createRoot(rootElement).render(
     <App />
   </React.StrictMode>
 );
+
+registerPwa();
