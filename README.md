@@ -469,15 +469,17 @@ Malformed JSON, JSON values that are not objects, unknown control messages, and 
 
 ## Backend Configuration
 
-Backend startup requires the first three values below. `LLM_API_KEY` is optional
-for local Ollama and other providers that do not require a key:
+Backend startup requires `WHISPER_MODEL`, `LLM_BASE_URL`, and `LLM_MODEL`.
+`LLM_API_KEY` is optional for local Ollama and other providers that do not
+require a key:
 
-| Variable        | Purpose                                                          |
-| --------------- | ---------------------------------------------------------------- |
-| `WHISPER_MODEL` | Faster-Whisper model name, for example `base.en`.                |
-| `LLM_BASE_URL`  | OpenAI-compatible LLM API base URL.                              |
-| `LLM_API_KEY`   | Optional API key passed to the configured LLM provider.          |
-| `LLM_MODEL`     | LLM model name used for cleanup.                                 |
+| Variable              | Purpose                                                          |
+| --------------------- | ---------------------------------------------------------------- |
+| `WHISPER_MODEL`       | Faster-Whisper model name, for example `base.en`.                |
+| `LLM_BASE_URL`        | OpenAI-compatible LLM API base URL.                              |
+| `LLM_API_KEY`         | Optional for local Ollama; required in remote authenticated mode.|
+| `LLM_MODEL`           | LLM model name used for cleanup.                                 |
+| `LLM_TIMEOUT_SECONDS` | Server-side cleanup timeout in seconds (defaults to `30`).       |
 
 Copy `backend/.env.example` to `backend/.env` for the local development defaults. The backend tries the LLM connection at startup but logs a warning rather than failing if that check cannot connect.
 
@@ -494,6 +496,11 @@ LLM_MODEL=your-model-name
 ```
 
 Other OpenAI-compatible providers can also be used.
+
+For remote authenticated mode, configure the provider URL, model, API key, and
+timeout only on the backend. The API key is never returned to the browser.
+Cleanup failures return a safe availability error; the application retains the
+raw transcript rather than losing the meeting.
 
 If LLM cleanup is disabled or unavailable, the application can still provide the raw Whisper transcription.
 

@@ -139,6 +139,7 @@ def remote_client(monkeypatch: pytest.MonkeyPatch):
     store = FakeRemoteStore()
     monkeypatch.setenv("WHISPER_MODEL", "test-model")
     monkeypatch.setenv("LLM_BASE_URL", "http://llm.test/v1")
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "test-model")
     monkeypatch.setenv("MEETING_STORAGE_BACKEND", "postgresql")
     monkeypatch.setenv("POSTGRES_DATABASE_URL", "postgresql://test")
@@ -273,6 +274,39 @@ def test_remote_meeting_creation_uses_a_server_timestamp(remote_client) -> None:
 
     assert created.status_code == 201
     assert created.json()["createdAt"] != "2000-01-01T00:00:00+00:00"
+
+
+def test_status_does_not_expose_the_llm_api_key(remote_client) -> None:
+    client, _store = remote_client
+
+    response = client.get("/api/status")
+
+    assert response.status_code == 200
+    assert "LLM_API_KEY" not in response.text
+    assert "test-key" not in response.text
+
+
+def test_clean_endpoint_returns_a_safe_provider_failure(
+    remote_client,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client, _store = remote_client
+    transcript = "Sensitive transcript content"
+
+    class FailingService:
+        def clean_with_llm(self, *_args: object, **_kwargs: object) -> str:
+            from llm import MeetingIntelligenceError
+
+            raise MeetingIntelligenceError("provider response included test-key")
+
+    monkeypatch.setattr(backend_app, "service", FailingService())
+
+    response = client.post("/api/clean", json={"text": transcript})
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Meeting intelligence is unavailable"}
+    assert transcript not in capsys.readouterr().out
 
 
 REMOTE_WEBSOCKET_HEADERS = {"origin": "https://app.example.test"}

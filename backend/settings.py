@@ -49,6 +49,7 @@ class Settings:
     llm_base_url: str
     llm_api_key: str | None
     llm_model: str
+    llm_timeout_seconds: float
     database_path: str
     storage_backend: str
     postgres_database_url: str | None
@@ -86,6 +87,7 @@ class Settings:
 
         auth_enabled = os.getenv("AUTH_ENABLED", "0") == "1"
         auth_session_secret = os.getenv("AUTH_SESSION_SECRET")
+        llm_api_key = os.getenv("LLM_API_KEY")
         try:
             auth_session_lifetime_seconds = int(
                 os.getenv("AUTH_SESSION_LIFETIME_SECONDS", "86400")
@@ -94,6 +96,10 @@ class Settings:
             raise RuntimeError(
                 "AUTH_SESSION_LIFETIME_SECONDS must be an integer"
             ) from error
+        try:
+            llm_timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
+        except ValueError as error:
+            raise RuntimeError("LLM_TIMEOUT_SECONDS must be a number") from error
 
         if auth_enabled and storage_backend != "postgresql":
             raise RuntimeError(
@@ -107,14 +113,19 @@ class Settings:
             raise RuntimeError(
                 "AUTH_ENABLED requires an AUTH_SESSION_SECRET of at least 32 characters"
             )
+        if auth_enabled and not llm_api_key:
+            raise RuntimeError("AUTH_ENABLED requires LLM_API_KEY")
         if auth_session_lifetime_seconds <= 0:
             raise RuntimeError("AUTH_SESSION_LIFETIME_SECONDS must be positive")
+        if llm_timeout_seconds <= 0:
+            raise RuntimeError("LLM_TIMEOUT_SECONDS must be positive")
 
         return cls(
             whisper_model=values["WHISPER_MODEL"],
             llm_base_url=values["LLM_BASE_URL"],
-            llm_api_key=os.getenv("LLM_API_KEY"),
+            llm_api_key=llm_api_key,
             llm_model=values["LLM_MODEL"],
+            llm_timeout_seconds=llm_timeout_seconds,
             database_path=os.getenv("DATABASE_PATH", str(Path("data") / "meetings.db")),
             storage_backend=storage_backend,
             postgres_database_url=postgres_database_url,

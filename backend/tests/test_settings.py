@@ -63,8 +63,9 @@ def test_remote_authentication_configuration_is_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("WHISPER_MODEL", "base.en")
-    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
-    monkeypatch.setenv("LLM_MODEL", "gemma3:4b")
+    monkeypatch.setenv("LLM_BASE_URL", "https://provider.example.test/v1")
+    monkeypatch.setenv("LLM_API_KEY", "remote-provider-key")
+    monkeypatch.setenv("LLM_MODEL", "remote-model")
     monkeypatch.setenv("MEETING_STORAGE_BACKEND", "postgresql")
     monkeypatch.setenv("POSTGRES_DATABASE_URL", "postgresql://test")
     monkeypatch.setenv("AUTH_ENABLED", "1")
@@ -74,3 +75,32 @@ def test_remote_authentication_configuration_is_opt_in(
 
     assert settings.auth_enabled is True
     assert settings.auth_cookie_secure is True
+
+
+def test_remote_authentication_requires_an_llm_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHISPER_MODEL", "base.en")
+    monkeypatch.setenv("LLM_BASE_URL", "https://provider.example.test/v1")
+    monkeypatch.setenv("LLM_MODEL", "remote-model")
+    monkeypatch.setenv("MEETING_STORAGE_BACKEND", "postgresql")
+    monkeypatch.setenv("POSTGRES_DATABASE_URL", "postgresql://test")
+    monkeypatch.setenv("AUTH_ENABLED", "1")
+    monkeypatch.setenv("AUTH_SESSION_SECRET", "s" * 32)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="AUTH_ENABLED requires LLM_API_KEY"):
+        Settings.from_environment()
+
+
+def test_llm_timeout_is_configured_server_side(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHISPER_MODEL", "base.en")
+    monkeypatch.setenv("LLM_BASE_URL", "https://provider.example.test/v1")
+    monkeypatch.setenv("LLM_MODEL", "remote-model")
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "12.5")
+
+    settings = Settings.from_environment()
+
+    assert settings.llm_timeout_seconds == 12.5

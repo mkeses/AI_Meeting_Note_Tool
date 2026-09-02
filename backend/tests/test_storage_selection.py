@@ -46,6 +46,7 @@ def test_postgresql_storage_is_selected_when_configured(
     )
     monkeypatch.setenv("AUTH_ENABLED", "1")
     monkeypatch.setenv("AUTH_SESSION_SECRET", "s" * 32)
+    monkeypatch.setenv("LLM_API_KEY", "remote-provider-key")
 
     settings = Settings.from_environment()
 

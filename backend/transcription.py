@@ -8,6 +8,7 @@ from faster_whisper import WhisperModel
 
 from llm import (
     SYSTEM_PROMPT,
+    MeetingIntelligenceError,
     MeetingIntelligenceProvider,
     OpenAICompatibleMeetingIntelligence,
 )
@@ -18,8 +19,9 @@ class TranscriptionService:
         self,
         whisper_model: str,
         llm_base_url: str,
-        llm_api_key: str,
+        llm_api_key: str | None,
         llm_model: str,
+        llm_timeout_seconds: float = 30.0,
         llm_provider: MeetingIntelligenceProvider | None = None,
     ):
         print(f"Loading Whisper model '{whisper_model}'...")
@@ -40,7 +42,10 @@ class TranscriptionService:
 
         print(f"Connecting to LLM at {llm_base_url}...")
         self.llm_provider = llm_provider or OpenAICompatibleMeetingIntelligence(
-            base_url=llm_base_url, api_key=llm_api_key, model=llm_model
+            base_url=llm_base_url,
+            api_key=llm_api_key,
+            model=llm_model,
+            timeout_seconds=llm_timeout_seconds,
         )
 
     def transcribe(self, audio_file):
@@ -62,7 +67,6 @@ class TranscriptionService:
             f"Detected language: {info.language} "
             f"(p={info.language_probability:.2f})"
         )
-        print(f"Raw: {text!r}")
         return text
 
     def get_default_system_prompt(self):
@@ -75,7 +79,12 @@ class TranscriptionService:
 
     def clean_with_llm(self, text, system_prompt=None, meeting_type="general"):
         print("Cleaning with LLM...")
-        return self.llm_provider.clean(text, system_prompt, meeting_type)
+        try:
+            return self.llm_provider.clean(text, system_prompt, meeting_type)
+        except MeetingIntelligenceError:
+            raise
+        except Exception as error:
+            raise MeetingIntelligenceError("Meeting intelligence failed") from error
 
     def transcribe_file(self, audio_file_path: str, use_llm: bool = True) -> dict:
         raw_text = self.transcribe(audio_file_path)
@@ -83,8 +92,11 @@ class TranscriptionService:
         result = {"raw_text": raw_text}
 
         if use_llm and raw_text:
-            cleaned_text = self.clean_with_llm(raw_text)
-            result["cleaned_text"] = cleaned_text
+            try:
+                result["cleaned_text"] = self.clean_with_llm(raw_text)
+            except MeetingIntelligenceError as error:
+                result["cleaned_text"] = raw_text
+                result["cleanup_error"] = str(error)
         else:
             result["cleaned_text"] = raw_text
 

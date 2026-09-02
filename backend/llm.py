@@ -3,11 +3,22 @@
 from pathlib import Path
 from typing import Protocol
 
-from openai import OpenAI
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AuthenticationError,
+    NotFoundError,
+    OpenAI,
+)
 
 PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 SYSTEM_PROMPT = PROMPT_FILE.read_text().strip()
 MEETING_NOTES_MAX_TOKENS = 1200
+
+
+class MeetingIntelligenceError(RuntimeError):
+    """A stable, safe failure from a meeting-intelligence provider."""
 
 
 class MeetingIntelligenceProvider(Protocol):
@@ -22,15 +33,28 @@ class MeetingIntelligenceProvider(Protocol):
 class OpenAICompatibleMeetingIntelligence:
     """OpenAI-compatible implementation, including Ollama support."""
 
-    def __init__(self, base_url: str, api_key: str, model: str) -> None:
-        self.client = OpenAI(base_url=base_url, api_key=api_key)
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str | None,
+        model: str,
+        timeout_seconds: float = 30.0,
+        client: OpenAI | None = None,
+    ) -> None:
+        self.client = client or OpenAI(
+            base_url=base_url,
+            api_key=api_key or "ollama",
+            timeout=timeout_seconds,
+        )
         self.model = model
-        try:
-            self.client.models.list()
-            print("Connected to LLM API!")
-        except Exception as error:
-            print(f"Warning: Could not connect to LLM: {error}")
-            print(f"   Make sure your LLM server is running at {base_url}")
+        if client is None:
+            try:
+                self.client.models.list()
+                print("Connected to LLM API!")
+            except Exception:
+                print(
+                    "LLM provider is unavailable at startup; cleanup will be unavailable"
+                )
 
     @staticmethod
     def build_prompt(base_prompt: str, meeting_type: str) -> str:
@@ -74,13 +98,46 @@ common output structure.
         if not text:
             return ""
         prompt = self.build_prompt(system_prompt or SYSTEM_PROMPT, meeting_type)
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": f"Transcript:\n{text}"},
-            ],
-            temperature=0.2,
-            max_tokens=MEETING_NOTES_MAX_TOKENS,
-        )
-        return response.choices[0].message.content.strip()
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": f"Transcript:\n{text}"},
+                ],
+                temperature=0.2,
+                max_tokens=MEETING_NOTES_MAX_TOKENS,
+            )
+        except (APITimeoutError, TimeoutError) as error:
+            raise MeetingIntelligenceError("Meeting intelligence timed out") from error
+        except AuthenticationError as error:
+            raise MeetingIntelligenceError(
+                "Meeting intelligence authentication failed"
+            ) from error
+        except NotFoundError as error:
+            raise MeetingIntelligenceError(
+                "Configured LLM model is unavailable"
+            ) from error
+        except (APIConnectionError, ConnectionError) as error:
+            raise MeetingIntelligenceError(
+                "Meeting intelligence provider is unavailable"
+            ) from error
+        except APIStatusError as error:
+            raise MeetingIntelligenceError(
+                "Meeting intelligence provider request failed"
+            ) from error
+        except Exception as error:
+            raise MeetingIntelligenceError("Meeting intelligence failed") from error
+
+        try:
+            content = response.choices[0].message.content
+        except (AttributeError, IndexError, TypeError) as error:
+            raise MeetingIntelligenceError(
+                "Meeting intelligence provider returned an invalid response"
+            ) from error
+
+        if not isinstance(content, str) or not content.strip():
+            raise MeetingIntelligenceError(
+                "Meeting intelligence provider returned no meeting notes"
+            )
+        return content.strip()

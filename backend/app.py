@@ -35,6 +35,7 @@ from auth import (
     verify_password,
 )
 from auth_models import AuthenticatedUserResponse, AuthenticationRequest
+from llm import MeetingIntelligenceError
 from meeting_models import MeetingCreate, MeetingResponse, MeetingUpdate
 from settings import Settings, remote_cors_origins_from_environment
 from storage import (
@@ -143,6 +144,7 @@ async def lifespan(app: FastAPI):
         llm_base_url=settings.llm_base_url,
         llm_api_key=settings.llm_api_key,
         llm_model=settings.llm_model,
+        llm_timeout_seconds=settings.llm_timeout_seconds,
     )
     meeting_repository = create_meeting_store(settings)
     meeting_repository.initialize()
@@ -490,12 +492,11 @@ async def clean_text(request: CleanRequest):
             "text": cleaned_text,
         }
 
-    except Exception as error:
-        print(f"LLM cleaning failed: {error}")
-
+    except MeetingIntelligenceError as error:
+        print("LLM cleaning failed")
         raise HTTPException(
             status_code=502,
-            detail="LLM cleaning failed. Check the backend terminal for details.",
+            detail="Meeting intelligence is unavailable",
         ) from error
 
 
