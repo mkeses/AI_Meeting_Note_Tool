@@ -24,10 +24,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from scipy.signal import resample_poly
 
-from database import MeetingConflictError, MeetingRepository, MeetingStorageError
 from meeting_models import MeetingCreate, MeetingResponse, MeetingUpdate
 from settings import Settings
-from storage import MeetingStore
+from storage import (
+    MeetingConflictError,
+    MeetingStorageError,
+    MeetingStore,
+    create_meeting_store,
+)
 from transcription import TranscriptionService
 
 load_dotenv()
@@ -112,7 +116,7 @@ async def lifespan(app: FastAPI):
         llm_api_key=settings.llm_api_key,
         llm_model=settings.llm_model,
     )
-    meeting_repository = MeetingRepository(settings.database_path)
+    meeting_repository = create_meeting_store(settings)
     meeting_repository.initialize()
 
     print("Ready!")

@@ -26,6 +26,9 @@ dev = [
 packaging = [
     "pyinstaller>=6.0,<7.0",
 ]
+postgres = [
+    "psycopg[binary]>=3.2,<4",
+]
 
 
 [tool.black]
@@ -77,3 +80,6 @@ ignore = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "integration: requires an external PostgreSQL database",
+]

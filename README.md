@@ -456,13 +456,14 @@ Malformed JSON, JSON values that are not objects, unknown control messages, and 
 
 ## Backend Configuration
 
-Backend startup requires all four values below, even when the frontend disables LLM cleanup:
+Backend startup requires the first three values below. `LLM_API_KEY` is optional
+for local Ollama and other providers that do not require a key:
 
 | Variable        | Purpose                                                          |
 | --------------- | ---------------------------------------------------------------- |
 | `WHISPER_MODEL` | Faster-Whisper model name, for example `base.en`.                |
 | `LLM_BASE_URL`  | OpenAI-compatible LLM API base URL.                              |
-| `LLM_API_KEY`   | API key passed to that client. Ollama ignores the example value. |
+| `LLM_API_KEY`   | Optional API key passed to the configured LLM provider.          |
 | `LLM_MODEL`     | LLM model name used for cleanup.                                 |
 
 Copy `backend/.env.example` to `backend/.env` for the local development defaults. The backend tries the LLM connection at startup but logs a warning rather than failing if that check cannot connect.
@@ -482,6 +483,32 @@ LLM_MODEL=your-model-name
 Other OpenAI-compatible providers can also be used.
 
 If LLM cleanup is disabled or unavailable, the application can still provide the raw Whisper transcription.
+
+### Meeting storage
+
+SQLite remains the default local and Electron storage backend. To use PostgreSQL
+in a future server deployment, install the optional driver and configure:
+
+```bash
+cd backend
+uv sync --extra postgres --extra dev
+```
+
+```env
+MEETING_STORAGE_BACKEND=postgresql
+POSTGRES_DATABASE_URL=postgresql://user:password@host:5432/meeting_notes
+```
+
+PostgreSQL uses native full-text search across meeting titles, cleaned
+transcripts, and notes. SQLite continues to use FTS5 unchanged.
+
+The PostgreSQL repository integration test is intentionally opt-in and never
+uses the desktop SQLite database:
+
+```bash
+cd backend
+POSTGRES_TEST_DATABASE_URL=postgresql://user:password@host:5432/meeting_notes uv run --extra postgres pytest tests/test_postgres_storage.py
+```
 
 ---
 

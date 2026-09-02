@@ -5,8 +5,8 @@ Configuration is loaded from .env file.
 """
 
 from faster_whisper import WhisperModel
+
 from llm import (
-    MEETING_NOTES_MAX_TOKENS,
     SYSTEM_PROMPT,
     MeetingIntelligenceProvider,
     OpenAICompatibleMeetingIntelligence,

@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-import transcription
 import llm
+import transcription
 
 
 class FakeWhisperModel:

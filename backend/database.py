@@ -9,19 +9,14 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+
 from meeting_entity import Meeting
+from storage import MeetingConflictError, MeetingStorageError
 
 DEFAULT_DATABASE_PATH = Path("data") / "meetings.db"
-
-
-class MeetingStorageError(RuntimeError):
-    """Raised when SQLite storage cannot complete an operation."""
-
-
-class MeetingConflictError(MeetingStorageError):
-    """Raised when a unique meeting identity already exists."""
 
 
 class MeetingRepository:
@@ -215,7 +210,7 @@ class MeetingRepository:
 
         return [self._row_to_meeting(row) for row in rows]
 
-    def update(self, meeting_id: str, changes: dict[str, str]) -> Meeting | None:
+    def update(self, meeting_id: str, changes: Mapping[str, str]) -> Meeting | None:
         if not changes:
             return self.get(meeting_id)
 

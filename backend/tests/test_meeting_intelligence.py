@@ -1,8 +1,7 @@
 import pytest
 
-from llm import OpenAICompatibleMeetingIntelligence
+from llm import MEETING_NOTES_MAX_TOKENS, OpenAICompatibleMeetingIntelligence
 from transcription import (
-    MEETING_NOTES_MAX_TOKENS,
     SYSTEM_PROMPT,
     TranscriptionService,
 )
