@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import {
   BackendLifecycleManager,
   createLifecycleLogger,
+  resolveBackendLaunchTarget,
 } from './desktop-backend.mjs';
 import {
   DESKTOP_RENDERER_ORIGIN,
@@ -55,14 +56,6 @@ function getRendererOrigin() {
   return useProductionRenderer
     ? DESKTOP_RENDERER_ORIGIN
     : new URL(developmentRendererUrl).origin;
-}
-
-function getDevelopmentBackendDirectory() {
-  if (app.isPackaged) {
-    throw new Error('The packaged Python backend is not available yet.');
-  }
-
-  return path.resolve(app.getAppPath(), '..', 'backend');
 }
 
 function registerRendererProtocol(resources) {
@@ -134,10 +127,22 @@ async function startDesktopApplication() {
     appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath,
   });
-  const backendWorkingDirectory = getDevelopmentBackendDirectory();
+  const backendLaunchTarget = resolveBackendLaunchTarget({
+    isPackaged: app.isPackaged,
+    appPath: app.getAppPath(),
+    resources,
+    developmentBackendCommand: process.env.ELECTRON_BACKEND_COMMAND ?? 'uv',
+  });
+  const availabilityPath =
+    backendLaunchTarget.backendExecutablePath ??
+    backendLaunchTarget.backendWorkingDirectory;
 
-  if (!fs.existsSync(backendWorkingDirectory)) {
-    throw new Error('The development Python backend directory is unavailable.');
+  if (!fs.existsSync(availabilityPath)) {
+    throw new Error(
+      app.isPackaged
+        ? 'The packaged backend executable is unavailable.'
+        : 'The development Python backend directory is unavailable.'
+    );
   }
 
   if (useProductionRenderer) {
@@ -147,9 +152,8 @@ async function startDesktopApplication() {
   backendLifecycle = createBackendLifecycle();
   const backend = await backendLifecycle.start({
     desktopRuntime,
-    backendWorkingDirectory,
+    ...backendLaunchTarget,
     rendererOrigin: getRendererOrigin(),
-    backendCommand: process.env.ELECTRON_BACKEND_COMMAND ?? 'uv',
   });
 
   activeBackendOrigin = backend.origin;

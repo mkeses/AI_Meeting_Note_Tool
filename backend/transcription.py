@@ -22,28 +22,12 @@ class TranscriptionService:
 
         self.whisper_device = "cpu"
         self.whisper_compute_type = "int8"
-
-        try:
-            self.whisper = WhisperModel(
-                whisper_model,
-                device="cuda",
-                compute_type="float16",
-            )
-            self.whisper_device = "cuda"
-            self.whisper_compute_type = "float16"
-            print("✅ Faster-Whisper loaded with CUDA (float16)")
-        except Exception as gpu_error:
-            print(f"⚠️ CUDA Whisper load failed: {gpu_error}")
-            print("↩️ Falling back to CPU Whisper (int8)...")
-
-            self.whisper = WhisperModel(
-                whisper_model,
-                device="cpu",
-                compute_type="int8",
-            )
-            self.whisper_device = "cpu"
-            self.whisper_compute_type = "int8"
-            print("✅ Faster-Whisper loaded on CPU (int8)")
+        self.whisper = WhisperModel(
+            whisper_model,
+            device="cpu",
+            compute_type="int8",
+        )
+        print("✅ Faster-Whisper loaded on CPU (int8)")
 
         print(
             f"✅ Whisper model '{whisper_model}' loaded on {self.whisper_device} "

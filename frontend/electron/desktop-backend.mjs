@@ -1,10 +1,31 @@
 import fs from 'node:fs';
 import net from 'node:net';
+import path from 'node:path';
 
 export const LOOPBACK_HOST = '127.0.0.1';
 export const DEFAULT_STARTUP_TIMEOUT_MS = 300_000;
 export const DEFAULT_READINESS_INTERVAL_MS = 250;
 export const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
+
+export function resolveBackendLaunchTarget({
+  isPackaged,
+  appPath,
+  resources,
+  developmentBackendCommand = 'uv',
+  pathApi = path,
+}) {
+  if (isPackaged) {
+    return {
+      backendExecutablePath: resources.backendExecutablePath,
+      backendWorkingDirectory: resources.backendDirectory,
+    };
+  }
+
+  return {
+    backendCommand: developmentBackendCommand,
+    backendWorkingDirectory: pathApi.resolve(appPath, '..', 'backend'),
+  };
+}
 
 function getErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
@@ -84,21 +105,26 @@ export function buildBackendLaunchSpec({
   port,
   rendererOrigin,
   backendCommand = 'uv',
+  backendExecutablePath,
   inheritedEnvironment = process.env,
 }) {
+  const isPackagedBackend = Boolean(backendExecutablePath);
+
   return {
-    command: backendCommand,
-    args: [
-      'run',
-      'uvicorn',
-      'app:app',
-      '--host',
-      LOOPBACK_HOST,
-      '--port',
-      String(port),
-      '--timeout-keep-alive',
-      '600',
-    ],
+    command: backendExecutablePath ?? backendCommand,
+    args: isPackagedBackend
+      ? ['--port', String(port), '--timeout-keep-alive', '600']
+      : [
+          'run',
+          'uvicorn',
+          'app:app',
+          '--host',
+          LOOPBACK_HOST,
+          '--port',
+          String(port),
+          '--timeout-keep-alive',
+          '600',
+        ],
     options: {
       cwd: backendWorkingDirectory,
       env: {
@@ -224,6 +250,7 @@ export class BackendLifecycleManager {
     backendWorkingDirectory,
     rendererOrigin,
     backendCommand,
+    backendExecutablePath,
     startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS,
   }) {
     if (this.child) {
@@ -238,6 +265,7 @@ export class BackendLifecycleManager {
       port,
       rendererOrigin,
       backendCommand,
+      backendExecutablePath,
     });
 
     this.log('backend-starting', { port });

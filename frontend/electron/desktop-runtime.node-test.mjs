@@ -6,9 +6,12 @@ import test from 'node:test';
 import {
   DEFAULT_DESKTOP_RUNTIME_CONFIG,
   DESKTOP_APPLICATION_NAME,
+  PACKAGED_BACKEND_DIRECTORY_NAME,
+  PACKAGED_BACKEND_EXECUTABLE_NAME,
   initializeDesktopRuntime,
   loadDesktopRuntimeConfig,
   resolveDesktopDataRoot,
+  resolveDesktopResourcePaths,
   resolveDesktopRuntimePaths,
 } from './desktop-runtime.mjs';
 
@@ -49,6 +52,23 @@ test('uses Electron userData as the non-Windows base', () => {
   assert.equal(
     dataRoot,
     `/home/ada/.config/ai-transcript-app/${DESKTOP_APPLICATION_NAME}`
+  );
+});
+
+test('resolves the packaged backend executable from Electron resources', () => {
+  const resources = resolveDesktopResourcePaths({
+    appPath: 'C:\\Program Files\\AI Meeting Note Tool\\resources\\app.asar',
+    resourcesPath: 'C:\\Program Files\\AI Meeting Note Tool\\resources',
+    pathApi: path.win32,
+  });
+
+  assert.equal(
+    resources.backendDirectory,
+    `C:\\Program Files\\AI Meeting Note Tool\\resources\\${PACKAGED_BACKEND_DIRECTORY_NAME}`
+  );
+  assert.equal(
+    resources.backendExecutablePath,
+    `C:\\Program Files\\AI Meeting Note Tool\\resources\\${PACKAGED_BACKEND_DIRECTORY_NAME}\\${PACKAGED_BACKEND_EXECUTABLE_NAME}`
   );
 });
 

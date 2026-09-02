@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
 import test from 'node:test';
 import {
   BackendLifecycleManager,
   buildBackendLaunchSpec,
   findAvailableLoopbackPort,
+  resolveBackendLaunchTarget,
   terminateBackendProcess,
   waitForBackendReadiness,
 } from './desktop-backend.mjs';
@@ -40,7 +42,11 @@ function createChild() {
 
 test('selects a port from a 127.0.0.1-only listener', async () => {
   const server = new EventEmitter();
-  server.address = () => ({ address: '127.0.0.1', family: 'IPv4', port: 45678 });
+  server.address = () => ({
+    address: '127.0.0.1',
+    family: 'IPv4',
+    port: 45678,
+  });
   server.listen = (options, callback) => {
     assert.deepEqual(options, {
       host: '127.0.0.1',
@@ -57,15 +63,25 @@ test('selects a port from a 127.0.0.1-only listener', async () => {
   );
 });
 
-test('builds a loopback launch command from desktop runtime configuration', () => {
+test('builds the development uvicorn launch command from desktop runtime configuration', () => {
+  const backendTarget = resolveBackendLaunchTarget({
+    isPackaged: false,
+    appPath: '/workspace/frontend',
+    resources: {},
+    pathApi: path.posix,
+  });
   const spec = buildBackendLaunchSpec({
     desktopRuntime: createDesktopRuntime(),
-    backendWorkingDirectory: '/workspace/backend',
+    ...backendTarget,
     port: 45678,
     rendererOrigin: 'meeting://renderer',
     inheritedEnvironment: { LLM_API_KEY: 'existing-secret' },
   });
 
+  assert.deepEqual(backendTarget, {
+    backendCommand: 'uv',
+    backendWorkingDirectory: '/workspace/backend',
+  });
   assert.deepEqual(spec.args, [
     'run',
     'uvicorn',
@@ -84,6 +100,54 @@ test('builds a loopback launch command from desktop runtime configuration', () =
   assert.equal(spec.options.env.LLM_BASE_URL, 'http://127.0.0.1:11434/v1');
   assert.equal(spec.options.env.LLM_MODEL, 'gemma3:4b');
   assert.equal(spec.options.env.ELECTRON_DESKTOP_MODE, '1');
+  assert.equal(spec.options.env.LLM_API_KEY, 'existing-secret');
+});
+
+test('builds the packaged backend executable launch command from desktop runtime configuration', () => {
+  const backendTarget = resolveBackendLaunchTarget({
+    isPackaged: true,
+    appPath: 'C:\\Program Files\\AI Meeting Note Tool\\resources\\app.asar',
+    resources: {
+      backendDirectory:
+        'C:\\Program Files\\AI Meeting Note Tool\\resources\\backend',
+      backendExecutablePath:
+        'C:\\Program Files\\AI Meeting Note Tool\\resources\\backend\\ai-meeting-note-backend.exe',
+    },
+    pathApi: path.win32,
+  });
+  const spec = buildBackendLaunchSpec({
+    desktopRuntime: createDesktopRuntime(),
+    ...backendTarget,
+    port: 45678,
+    rendererOrigin: 'meeting://renderer',
+    inheritedEnvironment: { LLM_API_KEY: 'existing-secret' },
+  });
+
+  assert.deepEqual(backendTarget, {
+    backendExecutablePath:
+      'C:\\Program Files\\AI Meeting Note Tool\\resources\\backend\\ai-meeting-note-backend.exe',
+    backendWorkingDirectory:
+      'C:\\Program Files\\AI Meeting Note Tool\\resources\\backend',
+  });
+  assert.equal(spec.command, backendTarget.backendExecutablePath);
+  assert.deepEqual(spec.args, [
+    '--port',
+    '45678',
+    '--timeout-keep-alive',
+    '600',
+  ]);
+  assert.equal(
+    spec.options.cwd,
+    'C:\\Program Files\\AI Meeting Note Tool\\resources\\backend'
+  );
+  assert.equal(spec.options.env.DATABASE_PATH, '/runtime/data/meetings.db');
+  assert.equal(spec.options.env.HF_HOME, '/runtime/models/huggingface');
+  assert.equal(spec.options.env.WHISPER_MODEL, 'base.en');
+  assert.equal(spec.options.env.LLM_BASE_URL, 'http://127.0.0.1:11434/v1');
+  assert.equal(spec.options.env.LLM_MODEL, 'gemma3:4b');
+  assert.equal(spec.options.env.ELECTRON_DESKTOP_MODE, '1');
+  assert.equal(spec.options.env.ELECTRON_RENDERER_ORIGIN, 'meeting://renderer');
+  assert.equal(spec.options.env.PYTHONUNBUFFERED, '1');
   assert.equal(spec.options.env.LLM_API_KEY, 'existing-secret');
 });
 

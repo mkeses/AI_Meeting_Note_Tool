@@ -3,6 +3,8 @@ import path from 'node:path';
 
 export const DESKTOP_APPLICATION_NAME = 'AI Meeting Note Tool';
 export const DESKTOP_CONFIG_VERSION = 1;
+export const PACKAGED_BACKEND_DIRECTORY_NAME = 'backend';
+export const PACKAGED_BACKEND_EXECUTABLE_NAME = 'ai-meeting-note-backend.exe';
 
 export const DEFAULT_DESKTOP_RUNTIME_CONFIG = Object.freeze({
   configVersion: DESKTOP_CONFIG_VERSION,
@@ -73,9 +75,19 @@ export function resolveDesktopResourcePaths({
   resourcesPath,
   pathApi = path,
 }) {
+  const backendDirectory = pathApi.join(
+    resourcesPath,
+    PACKAGED_BACKEND_DIRECTORY_NAME
+  );
+
   return {
     applicationResourcesDirectory: resourcesPath,
     rendererIndexPath: pathApi.join(appPath, 'dist', 'index.html'),
+    backendDirectory,
+    backendExecutablePath: pathApi.join(
+      backendDirectory,
+      PACKAGED_BACKEND_EXECUTABLE_NAME
+    ),
   };
 }
 

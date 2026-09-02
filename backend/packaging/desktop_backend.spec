@@ -3,19 +3,24 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
-BACKEND_DIRECTORY = Path(SPECPATH).resolve().parent.parent
+# PyInstaller sets SPECPATH to this spec's directory: backend/packaging.
+BACKEND_DIRECTORY = Path(SPECPATH).resolve().parent
 PACKAGE_NAME = "ai-meeting-note-backend"
 
 # `app` is intentionally imported only after command-line parsing so `--help`
 # remains cheap. Include that deferred import explicitly. CTranslate2 loads its
-# native runtime from package files, so collect its DLLs deliberately.
+# native runtime from package files, and Faster-Whisper resolves its VAD model
+# relative to its package directory, so collect those resources deliberately.
 analysis = Analysis(
     [str(BACKEND_DIRECTORY / "desktop_backend_entry.py")],
     pathex=[str(BACKEND_DIRECTORY)],
     binaries=collect_dynamic_libs("ctranslate2"),
-    datas=[(str(BACKEND_DIRECTORY / "system_prompt.txt"), ".")],
+    datas=[
+        (str(BACKEND_DIRECTORY / "system_prompt.txt"), "."),
+        *collect_data_files("faster_whisper", includes=["assets/**"]),
+    ],
     hiddenimports=["app"],
     hookspath=[],
     hooksconfig={},
