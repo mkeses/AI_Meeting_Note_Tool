@@ -211,6 +211,34 @@ def test_invalid_and_expired_sessions_are_rejected(remote_client) -> None:
     assert client.get("/api/auth/me").status_code == 401
 
 
+def test_remote_user_data_endpoints_require_the_authenticated_session(
+    remote_client,
+) -> None:
+    client, _store = remote_client
+
+    assert (
+        client.post("/api/clean", json={"text": "private transcript"}).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/api/transcribe",
+            files={"audio": ("recording.webm", b"audio", "audio/webm")},
+        ).status_code
+        == 401
+    )
+
+
+def test_invalid_authentication_input_does_not_echo_the_password(remote_client) -> None:
+    client, _store = remote_client
+
+    response = register(client, "ab", password="secret")
+
+    assert response.status_code == 422
+    assert "secret" not in response.text
+    assert response.json()["detail"][0]["loc"] == ["body", "login"]
+
+
 def test_meetings_are_scoped_to_the_authenticated_user(remote_client) -> None:
     alice_client, _store = remote_client
     bob_client = TestClient(backend_app.app)
@@ -284,6 +312,7 @@ def test_status_does_not_expose_the_llm_api_key(remote_client) -> None:
     assert response.status_code == 200
     assert "LLM_API_KEY" not in response.text
     assert "test-key" not in response.text
+    assert "llm_base_url" not in response.json()
 
 
 def test_clean_endpoint_returns_a_safe_provider_failure(
@@ -292,6 +321,8 @@ def test_clean_endpoint_returns_a_safe_provider_failure(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     client, _store = remote_client
+    register(client, "alice")
+    login(client, "alice")
     transcript = "Sensitive transcript content"
 
     class FailingService:
@@ -307,6 +338,57 @@ def test_clean_endpoint_returns_a_safe_provider_failure(
     assert response.status_code == 502
     assert response.json() == {"detail": "Meeting intelligence is unavailable"}
     assert transcript not in capsys.readouterr().out
+
+
+def test_transcription_upload_is_bounded_and_rejected_before_processing(
+    remote_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _store = remote_client
+    register(client, "alice")
+    login(client, "alice")
+    monkeypatch.setattr(backend_app, "MAX_AUDIO_UPLOAD_BYTES", 4)
+
+    class UnexpectedService:
+        def transcribe(self, _path: str) -> str:
+            raise AssertionError("oversized audio must not be transcribed")
+
+    monkeypatch.setattr(backend_app, "service", UnexpectedService())
+
+    response = client.post(
+        "/api/transcribe",
+        files={"audio": ("recording.webm", b"12345", "audio/webm")},
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "Audio file is too large"}
+
+
+def test_transcription_failure_does_not_return_exception_details(
+    remote_client,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client, _store = remote_client
+    register(client, "alice")
+    login(client, "alice")
+
+    class FailingService:
+        def transcribe(self, _path: str) -> str:
+            raise RuntimeError("database password and /private/path")
+
+    monkeypatch.setattr(backend_app, "service", FailingService())
+
+    response = client.post(
+        "/api/transcribe",
+        files={"audio": ("recording.webm", b"audio", "audio/webm")},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Transcription failed"}
+    output = capsys.readouterr().out
+    assert "database password" not in output
+    assert "/private/path" not in output
 
 
 REMOTE_WEBSOCKET_HEADERS = {"origin": "https://app.example.test"}

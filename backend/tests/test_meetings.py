@@ -40,6 +40,8 @@ def api_client(
     monkeypatch.setenv("LLM_BASE_URL", "http://llm.test/v1")
     monkeypatch.setenv("LLM_API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "test-model")
+    monkeypatch.setenv("AUTH_ENABLED", "0")
+    monkeypatch.delenv("MEETING_STORAGE_BACKEND", raising=False)
     monkeypatch.setattr(
         backend_app,
         "TranscriptionService",

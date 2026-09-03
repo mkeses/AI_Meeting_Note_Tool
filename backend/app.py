@@ -22,8 +22,10 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 from scipy.signal import resample_poly
 
 from auth import (
@@ -63,7 +65,12 @@ ELECTRON_RENDERER_ORIGIN = "meeting://renderer"
 
 def get_allowed_cors_origins() -> list[str]:
     """Return explicitly configured browser origins allowed to call the API."""
-    origins = [*VITE_CORS_ORIGINS, *remote_cors_origins_from_environment()]
+    configured_remote_origins = remote_cors_origins_from_environment()
+    origins = (
+        configured_remote_origins
+        if os.getenv("AUTH_ENABLED") == "1"
+        else [*VITE_CORS_ORIGINS, *configured_remote_origins]
+    )
 
     if (
         os.getenv("ELECTRON_DESKTOP_MODE") == "1"
@@ -75,6 +82,8 @@ def get_allowed_cors_origins() -> list[str]:
 
 
 class CleanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     text: str
     system_prompt: str | None = None
     meeting_type: str = "general"
@@ -107,6 +116,7 @@ LIVE_TRIGGER_BYTES = 160_000
 MAX_WEBSOCKET_CONTROL_MESSAGE_BYTES = 16 * 1024
 MAX_WEBSOCKET_AUDIO_CHUNK_BYTES = 1024 * 1024
 MAX_REMOTE_LIVE_AUDIO_BYTES = 256 * 1024 * 1024
+MAX_AUDIO_UPLOAD_BYTES = 256 * 1024 * 1024
 
 WEBSOCKET_UNAUTHORIZED_CLOSE_CODE = 4401
 WEBSOCKET_FORBIDDEN_ORIGIN_CLOSE_CODE = 4403
@@ -164,6 +174,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AI Transcript App", lifespan=lifespan)
 
 
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(
+    _request: Request, error: RequestValidationError
+) -> JSONResponse:
+    """Return validation details without echoing submitted secret values."""
+    safe_errors = [
+        {
+            "loc": list(item.get("loc", ())),
+            "msg": item.get("msg", "Invalid request"),
+            "type": item.get("type", "value_error"),
+        }
+        for item in error.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": safe_errors})
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_cors_origins(),
@@ -179,7 +205,6 @@ async def get_status():
         "status": "ready" if service else "initializing",
         "whisper_model": os.getenv("WHISPER_MODEL"),
         "llm_model": os.getenv("LLM_MODEL"),
-        "llm_base_url": os.getenv("LLM_BASE_URL"),
     }
 
 
@@ -243,6 +268,12 @@ def get_current_meeting_store(request: Request) -> MeetingStore:
 
 
 CurrentMeetingStore = Annotated[MeetingStore, Depends(get_current_meeting_store)]
+
+
+def require_request_access(request: Request) -> None:
+    """Keep local mode auth-free while protecting remote user-data routes."""
+    if get_application_settings().auth_enabled:
+        get_current_user(request)
 
 
 @app.post(
@@ -436,7 +467,10 @@ async def get_system_prompt():
 
 
 @app.post("/api/transcribe")
-async def transcribe_audio(audio: Annotated[UploadFile, File()]):
+async def transcribe_audio(
+    audio: Annotated[UploadFile, File()],
+    _request_access: Annotated[None, Depends(require_request_access)],
+):
     if service is None:
         raise HTTPException(
             status_code=503,
@@ -451,7 +485,12 @@ async def transcribe_audio(audio: Annotated[UploadFile, File()]):
             delete=False,
             suffix=suffix,
         ) as tmp:
-            content = await audio.read()
+            content = await audio.read(MAX_AUDIO_UPLOAD_BYTES + 1)
+            if len(content) > MAX_AUDIO_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Audio file is too large",
+                )
             tmp.write(content)
             tmp_path = tmp.name
 
@@ -462,12 +501,14 @@ async def transcribe_audio(audio: Annotated[UploadFile, File()]):
             "text": raw_text,
         }
 
+    except HTTPException:
+        raise
     except Exception as error:
-        print(f"Transcription error: {error}")
+        print(f"Transcription failed: {type(error).__name__}")
 
         raise HTTPException(
             status_code=500,
-            detail=f"Transcription failed: {error}",
+            detail="Transcription failed",
         ) from error
 
     finally:
@@ -476,7 +517,10 @@ async def transcribe_audio(audio: Annotated[UploadFile, File()]):
 
 
 @app.post("/api/clean")
-async def clean_text(request: CleanRequest):
+async def clean_text(
+    request: CleanRequest,
+    _request_access: Annotated[None, Depends(require_request_access)],
+):
     if service is None:
         raise HTTPException(status_code=503, detail="Service not ready")
 

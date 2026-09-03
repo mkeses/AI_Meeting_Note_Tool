@@ -15,6 +15,7 @@ def set_required_model_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_sqlite_is_the_default_meeting_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     set_required_model_configuration(monkeypatch)
     monkeypatch.delenv("MEETING_STORAGE_BACKEND", raising=False)
+    monkeypatch.setenv("AUTH_ENABLED", "0")
 
     settings = Settings.from_environment()
 

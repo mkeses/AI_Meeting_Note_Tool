@@ -113,8 +113,6 @@ class Settings:
             raise RuntimeError(
                 "AUTH_ENABLED requires an AUTH_SESSION_SECRET of at least 32 characters"
             )
-        if auth_enabled and not llm_api_key:
-            raise RuntimeError("AUTH_ENABLED requires LLM_API_KEY")
         if auth_session_lifetime_seconds <= 0:
             raise RuntimeError("AUTH_SESSION_LIFETIME_SECONDS must be positive")
         if llm_timeout_seconds <= 0:
