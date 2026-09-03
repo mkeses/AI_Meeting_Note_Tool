@@ -17,7 +17,7 @@ from auth import (
     verify_password,
 )
 from meeting_entity import Meeting
-from storage import MeetingConflictError, UserConflictError
+from storage import MeetingConflictError, MeetingStorageError, UserConflictError
 from user_entity import User
 
 
@@ -441,6 +441,39 @@ def test_readiness_returns_safe_service_unavailable_response(
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Service not ready"}
+
+
+def test_production_database_startup_failure_never_becomes_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnavailableStore:
+        def initialize(self) -> None:
+            raise MeetingStorageError("Unable to initialize meeting storage")
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("WHISPER_MODEL", "test-model")
+    monkeypatch.setenv("LLM_BASE_URL", "http://llm.test/v1")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+    monkeypatch.setenv("MEETING_STORAGE_BACKEND", "postgresql")
+    monkeypatch.setenv("POSTGRES_DATABASE_URL", "postgresql://database/meetings")
+    monkeypatch.setenv("AUTH_ENABLED", "1")
+    monkeypatch.setenv("AUTH_SESSION_SECRET", "s" * 32)
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "1")
+    monkeypatch.setenv("REMOTE_CORS_ORIGINS", "https://app.example.test")
+    monkeypatch.setattr(backend_app, "TranscriptionService", StubTranscriptionService)
+    monkeypatch.setattr(
+        backend_app,
+        "create_meeting_store",
+        lambda _settings: UnavailableStore(),
+    )
+
+    with (
+        pytest.raises(MeetingStorageError, match="Unable to initialize"),
+        TestClient(backend_app.app),
+    ):
+        pass
+
+    assert backend_app.application_status() == "initializing"
 
 
 def test_clean_endpoint_returns_a_safe_provider_failure(

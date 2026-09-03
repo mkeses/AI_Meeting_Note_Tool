@@ -120,7 +120,7 @@ def configure_production_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LLM_BASE_URL", "https://provider.example.test/v1")
     monkeypatch.setenv("LLM_MODEL", "remote-model")
     monkeypatch.setenv("MEETING_STORAGE_BACKEND", "postgresql")
-    monkeypatch.setenv("POSTGRES_DATABASE_URL", "postgresql://test")
+    monkeypatch.setenv("POSTGRES_DATABASE_URL", "postgresql://test/meeting_notes")
     monkeypatch.setenv("AUTH_ENABLED", "1")
     monkeypatch.setenv("AUTH_SESSION_SECRET", "s" * 32)
     monkeypatch.setenv("AUTH_COOKIE_SECURE", "1")
@@ -138,6 +138,41 @@ def test_production_settings_require_secure_authenticated_remote_configuration(
     assert settings.storage_backend == "postgresql"
     assert settings.auth_enabled is True
     assert settings.auth_cookie_secure is True
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "sqlite:///data/meetings.db",
+        "postgresql://",
+        "postgresql://database",
+        "postgresql://database:invalid/meeting_notes",
+    ],
+)
+def test_production_settings_reject_invalid_postgresql_database_urls(
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+) -> None:
+    configure_production_environment(monkeypatch)
+    monkeypatch.setenv("POSTGRES_DATABASE_URL", database_url)
+
+    with pytest.raises(RuntimeError, match="POSTGRES_DATABASE_URL"):
+        Settings.from_environment()
+
+
+def test_production_settings_accept_external_postgresql_tls_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_production_environment(monkeypatch)
+    database_url = (
+        "postgresql://meeting_user:password@managed.example.test:5432/meeting_notes"
+        "?sslmode=verify-full&sslrootcert=/run/secrets/database-ca.pem"
+    )
+    monkeypatch.setenv("POSTGRES_DATABASE_URL", database_url)
+
+    settings = Settings.from_environment()
+
+    assert settings.postgres_database_url == database_url
 
 
 @pytest.mark.parametrize(

@@ -70,6 +70,15 @@ externally managed PostgreSQL service, replace `POSTGRES_DATABASE_URL` with its
 TLS-capable connection string and omit the local database service if
 appropriate.
 
+Production accepts only `postgres://` or `postgresql://` connection URLs that
+name a database; SQLite URLs and malformed values fail before application
+startup. The bundled Compose database uses the internal `database` hostname.
+For a managed database, supply its hostname in the same variable instead. Use
+the provider's required TLS parameters, such as `?sslmode=require`, or
+`sslmode=verify-full` with a CA certificate made available to the backend. Do
+not add TLS requirements to the bundled URL unless the bundled database is
+configured for them.
+
 ## TLS certificate files
 
 Before starting the stack, place deployment-provided certificate material in a
@@ -102,6 +111,13 @@ and PostgreSQL have no host port mappings and communicate only through the
 internal Compose network. PostgreSQL data is stored in `postgres_data` and
 downloaded Whisper model files are stored in `backend_model_cache`; neither is
 removed by a normal `docker compose down`.
+
+The database schema initialization is currently idempotent and runs during
+FastAPI startup after PostgreSQL passes `pg_isready`. A database startup failure
+prevents the backend container from becoming ready, so Docker restarts it under
+the existing policy. This is not a substitute for schema migrations or backups:
+no backup automation is included, and a migration process should be introduced
+before future incompatible schema changes.
 
 Nginx proxies normal REST traffic as:
 

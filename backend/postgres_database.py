@@ -145,7 +145,7 @@ class PostgresMeetingRepository:
         except Exception as error:
             raise self._meeting_storage_error(
                 "Unable to initialize meeting storage", error
-            ) from error
+            ) from None
 
     def for_owner(self, owner_id: str) -> MeetingStore:
         return _OwnedPostgresMeetingStore(self, owner_id)

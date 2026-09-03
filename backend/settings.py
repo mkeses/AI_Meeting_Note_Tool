@@ -43,6 +43,34 @@ def remote_cors_origins_from_environment() -> list[str]:
     return origins
 
 
+def validate_postgres_database_url(
+    database_url: str,
+    *,
+    require_database_name: bool,
+) -> None:
+    """Reject invalid or non-PostgreSQL connection URLs without echoing secrets."""
+    if database_url != database_url.strip():
+        raise RuntimeError("POSTGRES_DATABASE_URL must be a PostgreSQL connection URL")
+
+    parsed = urlsplit(database_url)
+    try:
+        _port = parsed.port
+    except ValueError as error:
+        raise RuntimeError(
+            "POSTGRES_DATABASE_URL must be a PostgreSQL connection URL"
+        ) from error
+
+    if (
+        parsed.scheme not in {"postgres", "postgresql"}
+        or not parsed.hostname
+        or parsed.fragment
+    ):
+        raise RuntimeError("POSTGRES_DATABASE_URL must be a PostgreSQL connection URL")
+
+    if require_database_name and not parsed.path.strip("/"):
+        raise RuntimeError("POSTGRES_DATABASE_URL must name a database in production")
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     app_environment: str
@@ -88,6 +116,11 @@ class Settings:
         if storage_backend == "postgresql" and not postgres_database_url:
             raise RuntimeError(
                 "Missing required environment variable: POSTGRES_DATABASE_URL"
+            )
+        if storage_backend == "postgresql" and postgres_database_url:
+            validate_postgres_database_url(
+                postgres_database_url,
+                require_database_name=app_environment == "production",
             )
 
         auth_enabled = os.getenv("AUTH_ENABLED", "0") == "1"

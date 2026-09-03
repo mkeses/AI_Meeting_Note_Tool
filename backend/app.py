@@ -149,23 +149,22 @@ async def lifespan(app: FastAPI):
 
     print("Starting AI Transcript App...")
 
-    settings = Settings.from_environment()
-    application_settings = settings
-
-    service = TranscriptionService(
-        whisper_model=settings.whisper_model,
-        llm_base_url=settings.llm_base_url,
-        llm_api_key=settings.llm_api_key,
-        llm_model=settings.llm_model,
-        llm_timeout_seconds=settings.llm_timeout_seconds,
-    )
-    meeting_repository = create_meeting_store(settings)
-    meeting_repository.initialize()
-    authentication_store = create_authentication_store(settings, meeting_repository)
-
-    print("Ready!")
-
     try:
+        settings = Settings.from_environment()
+        application_settings = settings
+
+        service = TranscriptionService(
+            whisper_model=settings.whisper_model,
+            llm_base_url=settings.llm_base_url,
+            llm_api_key=settings.llm_api_key,
+            llm_model=settings.llm_model,
+            llm_timeout_seconds=settings.llm_timeout_seconds,
+        )
+        meeting_repository = create_meeting_store(settings)
+        meeting_repository.initialize()
+        authentication_store = create_authentication_store(settings, meeting_repository)
+
+        print("Ready!")
         yield
     finally:
         meeting_repository = None
