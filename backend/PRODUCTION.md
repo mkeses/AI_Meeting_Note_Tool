@@ -1,25 +1,25 @@
 # Production Remote Stack
 
 This repository provides a production deployment foundation for the remote
-application: an Nginx HTTPS/WSS edge, FastAPI, and PostgreSQL. It does not
-deploy a public host, provision DNS, issue or renew certificates, or provide a
-static PWA hosting service.
+application: an Nginx HTTPS/WSS edge, a static React PWA, FastAPI, and
+PostgreSQL. It does not deploy a public host, provision DNS, or issue or renew
+certificates.
 
 ```text
 Browser/PWA
     | HTTPS and WSS
     v
-Nginx reverse proxy (:80 redirects, :443 terminates TLS)
-    | HTTP and WebSocket on the Compose network
-    v
-FastAPI  ----> PostgreSQL
+Nginx (:80 redirects, :443 terminates TLS)
+    | serves PWA      | HTTP and WebSocket on the Compose network
+    v                 v
+React PWA         FastAPI  ----> PostgreSQL
 ```
 
-The proxy forwards `/api/...` requests to FastAPI and upgrades
-`/ws/transcribe` for live transcription. FastAPI's existing session-cookie and
-WebSocket `Origin` checks remain the only authentication boundary; the proxy
-does not add a second login mechanism. Faster-Whisper remains CPU/int8 and the
-LLM remains an external OpenAI-compatible provider.
+The proxy serves the PWA and forwards `/api/...` requests to FastAPI, while
+upgrading `/ws/...` for live transcription. FastAPI's existing session-cookie
+and WebSocket `Origin` checks remain the only authentication boundary; the
+proxy does not add a second login mechanism. Faster-Whisper remains CPU/int8
+and the LLM remains an external OpenAI-compatible provider.
 
 ## Configuration
 
@@ -38,10 +38,13 @@ Set these public deployment values consistently:
 - `REMOTE_CORS_ORIGINS` contains the exact PWA origin, for example
   `https://app.example.com`. It must have the same scheme, host, and optional
   port that the browser sends in its `Origin` header.
-- `VITE_BACKEND_URL` in the separately built PWA is `https://PUBLIC_HOST`.
-  The existing frontend derives `wss://PUBLIC_HOST/ws/transcribe`
-  automatically; do not expose a separate WebSocket URL unless a deployment
-  truly needs one.
+- The supplied PWA build leaves `VITE_BACKEND_URL` unset and uses its own
+  HTTPS origin for `/api/...` and `/ws/transcribe`. Set it only when the PWA
+  is intentionally hosted on a different origin. The existing frontend then
+  derives `wss://PUBLIC_HOST/ws/transcribe` automatically; do not expose a
+  separate WebSocket URL unless a deployment truly needs one. When needed,
+  set `VITE_BACKEND_URL` in `.env.production`; Compose passes it only as a
+  frontend build argument, never to FastAPI.
 
 Required secret values are:
 
@@ -106,6 +109,11 @@ cd backend
 docker compose --env-file .env.production -f compose.production.yml up --build
 ```
 
+The proxy image builds the frontend with `npm run build:pwa`, then serves the
+resulting static files from `/usr/share/nginx/html`. This PWA build uses
+root-relative assets for SPA routes such as `/login`; the existing `npm run
+build` remains the relative-asset Electron build.
+
 Only Nginx publishes host ports: HTTP `80` redirects to HTTPS `443`. FastAPI
 and PostgreSQL have no host port mappings and communicate only through the
 internal Compose network. PostgreSQL data is stored in `postgres_data` and
@@ -131,6 +139,14 @@ and live transcription as:
 wss://PUBLIC_HOST/ws/transcribe -> proxy WebSocket upgrade -> ws://backend:8000/ws/transcribe
 ```
 
+All other browser routes use Nginx's SPA fallback to `index.html`. API and
+WebSocket locations take precedence, so neither is served by that fallback.
+Hashed `/assets/` files receive long immutable cache headers; `index.html`, the
+manifest, and service worker revalidate. The service worker only caches the
+app shell and static assets. It never handles `/api/` or `/ws/` requests, so it
+does not cache sessions, CSRF tokens, meetings, transcript data, cleanup
+requests, or audio uploads.
+
 The proxy passes standard forwarding headers and leaves browser `Origin` and
 cookie headers intact for FastAPI's existing checks. It allows a 256 MiB audio
 file plus small multipart overhead, uses a short upstream connect timeout, and
@@ -138,11 +154,9 @@ allows long reads/sends for live transcription. WebSocket request/response
 buffering is disabled. The application still enforces its own upload and live
 audio limits.
 
-Build and host the PWA static files through the same HTTPS origin or a properly
-configured public frontend host. If it is a different origin, add that exact
-origin to `REMOTE_CORS_ORIGINS` and validate the browser cookie behavior before
-release. This Compose file intentionally does not add a frontend image or
-static-file server.
+The supplied stack hosts the PWA through the same HTTPS origin. If deploying a
+separate frontend host instead, add that exact origin to `REMOTE_CORS_ORIGINS`
+and validate browser cookie behavior before release.
 
 ## Health endpoints
 
@@ -176,6 +190,5 @@ automation once the actual hosting environment is selected.
 ## Not included
 
 This repository does not perform public deployment, DNS configuration,
-certificate issuance/renewal, managed secrets, rate limiting, backups,
-monitoring, or static PWA hosting. Those decisions remain for Phase 7J-4 and
-the target deployment environment.
+certificate issuance/renewal, managed secrets, rate limiting, backups, or
+monitoring. Those decisions remain with the target deployment environment.

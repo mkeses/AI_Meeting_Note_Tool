@@ -654,7 +654,13 @@ documented in [backend/PRODUCTION.md](backend/PRODUCTION.md). Its production
 compose stack places FastAPI and PostgreSQL on an internal network behind an
 HTTPS/WSS reverse proxy; it does not deploy any cloud infrastructure.
 
-The browser-facing WebSocket fallback remains `ws://<page-host>:8000/ws/transcribe`, so local browser development continues to use the published backend port. If using the parallel `8001` mapping, set `VITE_BACKEND_URL=http://host.docker.internal:8001` and `VITE_BACKEND_PORT=8001`; set `VITE_WS_URL` only when a different WebSocket base URL is needed.
+Browser development continues to use `ws://<page-host>:8000/ws/transcribe` by
+default. The production PWA build instead uses its current HTTPS origin, so
+the supplied Nginx proxy receives `/ws/transcribe` without exposing backend
+port `8000`. If using the parallel `8001` development mapping, set
+`VITE_BACKEND_URL=http://host.docker.internal:8001` and
+`VITE_BACKEND_PORT=8001`; set `VITE_WS_URL` only when a different WebSocket
+base URL is needed.
 
 ### Frontend
 

@@ -28,7 +28,11 @@ services:
     restart: unless-stopped
 
   proxy:
-    image: nginx:1.27-alpine
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.production
+      args:
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-}
     depends_on:
       backend:
         condition: service_healthy

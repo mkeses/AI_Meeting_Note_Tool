@@ -1,6 +1,16 @@
 const CACHE_NAME = 'signal-notes-shell-v1';
 const APP_SHELL = ['./', './manifest.webmanifest', './icon.svg'];
 
+function isSafeStaticRequest(request, url) {
+  return (
+    request.mode === 'navigate' ||
+    url.pathname === '/' ||
+    url.pathname === '/manifest.webmanifest' ||
+    url.pathname === '/icon.svg' ||
+    url.pathname.startsWith('/assets/')
+  );
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
@@ -32,7 +42,9 @@ self.addEventListener('fetch', (event) => {
   if (
     request.method !== 'GET' ||
     url.origin !== self.location.origin ||
-    url.pathname.startsWith('/api/')
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/ws/') ||
+    !isSafeStaticRequest(request, url)
   ) {
     return;
   }
@@ -44,10 +56,7 @@ self.addEventListener('fetch', (event) => {
       }
 
       return fetch(request).then((response) => {
-        if (
-          response.ok &&
-          (request.mode === 'navigate' || request.destination)
-        ) {
+        if (response.ok) {
           const responseCopy = response.clone();
           void caches
             .open(CACHE_NAME)

@@ -33,6 +33,20 @@ function getConfiguredBackendOrigin(): string | null {
   return origin && origin.trim() ? normalizeBackendOrigin(origin) : null;
 }
 
+export function getDefaultTranscribeWebSocketUrl(
+  isProduction: boolean,
+  location: Pick<Location, 'host' | 'hostname' | 'protocol'>,
+  backendPort: string
+): string {
+  const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+
+  if (isProduction) {
+    return `${wsProtocol}://${location.host}/ws/transcribe`;
+  }
+
+  return `${wsProtocol}://${location.hostname}:${backendPort}/ws/transcribe`;
+}
+
 /**
  * Returns an API path for browser/Vite development, or a loopback API URL for
  * the Electron renderer. Electron supplies its backend origin through the
@@ -86,9 +100,11 @@ export function getTranscribeWebSocketUrl(): string {
     return appendTranscriptionPath(url);
   }
 
-  const isSecurePage = window.location.protocol === 'https:';
-  const wsProtocol = isSecurePage ? 'wss' : 'ws';
   const backendPort = (import.meta.env.VITE_BACKEND_PORT as string) || '8000';
 
-  return `${wsProtocol}://${window.location.hostname}:${backendPort}/ws/transcribe`;
+  return getDefaultTranscribeWebSocketUrl(
+    import.meta.env.PROD,
+    window.location,
+    backendPort
+  );
 }

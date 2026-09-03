@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getBackendApiUrl, getTranscribeWebSocketUrl } from './config';
+import {
+  getBackendApiUrl,
+  getDefaultTranscribeWebSocketUrl,
+  getTranscribeWebSocketUrl,
+} from './config';
 
 describe('getTranscribeWebSocketUrl', () => {
   afterEach(() => {
@@ -31,6 +35,20 @@ describe('getTranscribeWebSocketUrl', () => {
     expect(getTranscribeWebSocketUrl()).toBe(
       `${protocol}://${window.location.hostname}:8123/ws/transcribe`
     );
+  });
+
+  it('uses the current HTTPS origin for an unconfigured production PWA', () => {
+    expect(
+      getDefaultTranscribeWebSocketUrl(
+        true,
+        {
+          protocol: 'https:',
+          host: 'app.example.com:8443',
+          hostname: 'app.example.com',
+        },
+        '8000'
+      )
+    ).toBe('wss://app.example.com:8443/ws/transcribe');
   });
 
   it('keeps browser REST API paths relative for the Vite proxy', () => {
