@@ -1169,31 +1169,35 @@ function App() {
                   )}
                 </div>
 
-                <div className={styles.uploadArea}>
-                  <UploadZone
-                    isProcessing={isProcessing}
-                    isDragging={isDragging}
-                    onFileSelect={handleFileSelect}
-                    onDragEnter={handleDragEnter}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                    fileInputRef={fileInputRef}
-                  />
-                </div>
+                {!isRemoteWorkspace && (
+                  <div className={styles.uploadArea}>
+                    <UploadZone
+                      isProcessing={isProcessing}
+                      isDragging={isDragging}
+                      onFileSelect={handleFileSelect}
+                      onDragEnter={handleDragEnter}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                      fileInputRef={fileInputRef}
+                    />
+                  </div>
+                )}
               </div>
 
-              <details className={styles.textInputDetails}>
-                <summary className={styles.promptToggle}>
-                  Use an existing text transcript
-                  <span aria-hidden="true">⌄</span>
-                </summary>
-                <div className={styles.textInputContent}>
-                  <TextInputZone
-                    isProcessing={isProcessing}
-                    onTextSubmit={handleTextSubmit}
-                  />
-                </div>
-              </details>
+              {!isRemoteWorkspace && (
+                <details className={styles.textInputDetails}>
+                  <summary className={styles.promptToggle}>
+                    Use an existing text transcript
+                    <span aria-hidden="true">⌄</span>
+                  </summary>
+                  <div className={styles.textInputContent}>
+                    <TextInputZone
+                      isProcessing={isProcessing}
+                      onTextSubmit={handleTextSubmit}
+                    />
+                  </div>
+                </details>
+              )}
             </section>
 
             <section className={`${styles.card} ${styles.configCard}`}>

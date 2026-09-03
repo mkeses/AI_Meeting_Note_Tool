@@ -84,7 +84,7 @@ The next development phase focuses on export workflows before moving toward desk
 | Backend testing              | pytest                          |
 | Python dependency management | `uv`                            |
 | Development environment      | Docker / Dev Container          |
-| GPU acceleration             | NVIDIA CUDA                     |
+| Whisper execution            | Faster-Whisper CPU/int8         |
 
 ---
 
@@ -198,7 +198,7 @@ The environment uses:
 - Node.js
 - Python
 - `uv`
-- NVIDIA CUDA support
+- CUDA-capable development tooling (Whisper GPU execution is future work)
 - Docker-managed frontend dependencies
 
 ---
@@ -616,9 +616,9 @@ uv run uvicorn app:app --reload --host 0.0.0.0 --port 8000 --timeout-keep-alive 
 
 ### Backend runtime container
 
-The Dev Container is for interactive development; `backend/Dockerfile` is a separate, non-root FastAPI runtime image. It reuses the established CUDA 12.3 + cuDNN 9, Python 3.12, and locked `uv` dependency stack. It contains no `.env`, frontend dependencies, or host GPU drivers.
+The Dev Container is for interactive development; `backend/Dockerfile` is a separate, non-root FastAPI runtime image. It reuses the established CUDA 12.3 + cuDNN 9, Python 3.12, and locked `uv` dependency stack. The current Faster-Whisper service still runs CPU/int8; CUDA/FP16 Whisper execution is future work. The image contains no `.env`, frontend dependencies, or host GPU drivers.
 
-Docker Desktop with WSL2 and NVIDIA container support is required for the GPU path. The runtime receives its existing configuration only from `backend/.env` and exposes FastAPI on host port `8000`:
+Docker Desktop with WSL2 and NVIDIA container support is needed only for GPU-enabled development tooling such as Ollama; it is not required by the current CPU/int8 Whisper path. The runtime receives its existing configuration only from `backend/.env` and exposes FastAPI on host port `8000`:
 
 ```bash
 cd backend
@@ -626,7 +626,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-The compose file requests the host GPU and stores downloaded Whisper models in a Docker-managed volume. It does not start an LLM service. To use the existing Dev Container Ollama service from this separate backend container, set this in `backend/.env` before starting it:
+The compose file requests the host GPU for the development services and stores downloaded Whisper models in a Docker-managed volume. Current Whisper execution remains CPU/int8. It does not start an LLM service. To use the existing Dev Container Ollama service from this separate backend container, set this in `backend/.env` before starting it:
 
 ```env
 LLM_BASE_URL=http://host.docker.internal:11435/v1

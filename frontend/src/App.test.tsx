@@ -437,11 +437,11 @@ describe('App live transcript editor', () => {
     );
 
     expect(
-      screen.getByRole('button', { name: 'Upload audio file' })
-    ).toBeInTheDocument();
+      screen.queryByRole('button', { name: 'Upload audio file' })
+    ).not.toBeInTheDocument();
     expect(
-      screen.getByText('Use an existing text transcript')
-    ).toBeInTheDocument();
+      screen.queryByText('Use an existing text transcript')
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole('switch', { name: 'Include microphone' })
     ).toBeInTheDocument();
