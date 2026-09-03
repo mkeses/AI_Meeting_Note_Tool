@@ -16,6 +16,7 @@ from auth import (
     verify_csrf_token,
     verify_password,
 )
+from auth_rate_limit import AuthenticationAttemptLimiter
 from meeting_entity import Meeting
 from storage import MeetingConflictError, MeetingStorageError, UserConflictError
 from user_entity import User
@@ -300,6 +301,80 @@ def test_registration_login_current_user_and_logout(remote_client) -> None:
     assert client.get("/api/auth/me").status_code == 401
 
 
+def test_failed_login_attempts_are_limited_and_success_resets_them(
+    remote_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _store = remote_client
+    limiter = AuthenticationAttemptLimiter(
+        max_attempts=2,
+        window_seconds=60,
+        max_entries=10,
+    )
+    monkeypatch.setattr(backend_app, "authentication_attempt_limiter", limiter)
+    register(client, "alice")
+
+    assert login(client, "alice", "wrong-password").status_code == 401
+    assert login(client, "alice").status_code == 200
+    assert login(client, "alice", "wrong-password").status_code == 401
+    assert login(client, "alice", "wrong-password").status_code == 401
+
+    limited = login(client, "alice", "wrong-password")
+
+    assert limited.status_code == 429
+    assert limited.json() == {
+        "detail": "Too many authentication attempts. Please try again later."
+    }
+    assert limited.headers["retry-after"]
+    assert "wrong-password" not in limited.text
+
+
+def test_registration_attempts_are_limited(
+    remote_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _store = remote_client
+    limiter = AuthenticationAttemptLimiter(
+        max_attempts=2,
+        window_seconds=60,
+        max_entries=10,
+    )
+    monkeypatch.setattr(backend_app, "authentication_attempt_limiter", limiter)
+
+    assert register(client, "alice").status_code == 201
+    assert register(client, "bob").status_code == 201
+
+    limited = register(client, "carol")
+
+    assert limited.status_code == 429
+    assert limited.headers["retry-after"]
+
+
+def test_limiter_is_enabled_only_for_production_remote_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = FakeRemoteStore()
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("WHISPER_MODEL", "test-model")
+    monkeypatch.setenv("LLM_BASE_URL", "http://llm.test/v1")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+    monkeypatch.setenv("MEETING_STORAGE_BACKEND", "postgresql")
+    monkeypatch.setenv("POSTGRES_DATABASE_URL", "postgresql://database/meetings")
+    monkeypatch.setenv("AUTH_ENABLED", "1")
+    monkeypatch.setenv("AUTH_SESSION_SECRET", "s" * 32)
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "1")
+    monkeypatch.setenv("REMOTE_CORS_ORIGINS", "https://app.example.test")
+    monkeypatch.setattr(backend_app, "TranscriptionService", StubTranscriptionService)
+    monkeypatch.setattr(backend_app, "create_meeting_store", lambda _settings: store)
+
+    with TestClient(backend_app.app):
+        assert isinstance(
+            backend_app.authentication_attempt_limiter,
+            AuthenticationAttemptLimiter,
+        )
+
+    assert backend_app.authentication_attempt_limiter is None
+
+
 def test_invalid_and_expired_sessions_are_rejected(remote_client) -> None:
     client, store = remote_client
     register(client, "alice")
@@ -345,6 +420,31 @@ def test_invalid_authentication_input_does_not_echo_the_password(remote_client) 
     assert response.status_code == 422
     assert "secret" not in response.text
     assert response.json()["detail"][0]["loc"] == ["body", "login"]
+
+
+def test_oversized_cleanup_input_is_rejected_before_provider_use(remote_client) -> None:
+    client, _store = remote_client
+    register(client, "alice")
+    login(client, "alice")
+    oversized_text = "private transcript " * (
+        backend_app.MAX_CLEAN_TEXT_CHARS // 17 + 1
+    )
+
+    response = client.post("/api/clean", json={"text": oversized_text})
+
+    assert response.status_code == 422
+    assert "private transcript" not in response.text
+
+
+def test_storage_errors_are_logged_without_sensitive_details(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(backend_app.HTTPException):
+        backend_app.raise_storage_http_error(
+            MeetingStorageError("postgresql://user:database-password@host/meetings")
+        )
+
+    assert "database-password" not in capsys.readouterr().out
 
 
 def test_meetings_are_scoped_to_the_authenticated_user(remote_client) -> None:

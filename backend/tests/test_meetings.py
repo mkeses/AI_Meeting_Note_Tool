@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 import app as backend_app
 from database import Meeting, MeetingRepository
+from meeting_models import MAX_MEETING_TEXT_CHARS
 
 
 class StubTranscriptionService:
@@ -193,6 +194,28 @@ def test_duplicate_ids_and_malformed_payloads_are_rejected(
     assert duplicate_response.status_code == 409
     assert invalid_response.status_code == 422
     assert empty_update_response.status_code == 422
+
+
+def test_oversized_json_and_meeting_text_are_rejected_safely(
+    api_client: TestClient,
+) -> None:
+    oversized_body = api_client.post(
+        "/api/meetings",
+        content=b"{}",
+        headers={
+            "content-type": "application/json",
+            "content-length": str(backend_app.MAX_JSON_REQUEST_BYTES + 1),
+        },
+    )
+    oversized_text = api_client.post(
+        "/api/meetings",
+        json=meeting_payload(rawText="x" * (MAX_MEETING_TEXT_CHARS + 1)),
+    )
+
+    assert oversized_body.status_code == 413
+    assert oversized_body.json() == {"detail": "Request body is too large"}
+    assert oversized_text.status_code == 422
+    assert "x" * 100 not in oversized_text.text
 
 
 def test_search_meetings_matches_titles_cleaned_transcripts_and_notes(

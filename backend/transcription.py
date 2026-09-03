@@ -40,7 +40,7 @@ class TranscriptionService:
             f"with compute_type={self.whisper_compute_type}"
         )
 
-        print(f"Connecting to LLM at {llm_base_url}...")
+        print("Connecting to LLM provider...")
         self.llm_provider = llm_provider or OpenAICompatibleMeetingIntelligence(
             base_url=llm_base_url,
             api_key=llm_api_key,

@@ -42,6 +42,7 @@ class FakeMeetingIntelligence:
 
 def test_transcription_service_initializes_faster_whisper_for_cpu_int8(
     monkeypatch,
+    capsys,
 ) -> None:
     FakeWhisperModel.calls.clear()
     monkeypatch.setattr(transcription, "WhisperModel", FakeWhisperModel)
@@ -49,7 +50,7 @@ def test_transcription_service_initializes_faster_whisper_for_cpu_int8(
 
     service = transcription.TranscriptionService(
         whisper_model="base.en",
-        llm_base_url="http://llm.test/v1",
+        llm_base_url="https://private-key@llm.test/v1",
         llm_api_key="test-key",
         llm_model="test-model",
     )
@@ -63,6 +64,7 @@ def test_transcription_service_initializes_faster_whisper_for_cpu_int8(
     ]
     assert service.whisper_device == "cpu"
     assert service.whisper_compute_type == "int8"
+    assert "private-key" not in capsys.readouterr().out
 
 
 def test_transcription_service_accepts_an_injected_intelligence_provider(

@@ -11,6 +11,8 @@ from meeting_entity import Meeting
 
 MeetingType = Literal["general", "design_review", "debug_sync", "standup"]
 SourceType = Literal["recording", "audio-file", "text"]
+MAX_MEETING_TEXT_CHARS = 1_000_000
+MAX_MEETING_NOTES_CHARS = 250_000
 
 
 class MeetingModel(BaseModel):
@@ -25,10 +27,12 @@ class MeetingCreate(MeetingModel):
     filename: str = Field(min_length=1, max_length=255)
     created_at: datetime | None = Field(default=None, alias="createdAt")
     meeting_type: MeetingType = Field(alias="meetingType")
-    raw_text: str = Field(alias="rawText")
-    cleaned_text: str = Field(default="", alias="cleanedText")
+    raw_text: str = Field(max_length=MAX_MEETING_TEXT_CHARS, alias="rawText")
+    cleaned_text: str = Field(
+        default="", max_length=MAX_MEETING_TEXT_CHARS, alias="cleanedText"
+    )
     source_type: SourceType = Field(alias="sourceType")
-    notes: str = ""
+    notes: str = Field(default="", max_length=MAX_MEETING_NOTES_CHARS)
 
     @field_validator("id", "source_key", "filename")
     @classmethod
@@ -69,10 +73,14 @@ class MeetingUpdate(MeetingModel):
     )
     filename: str | None = Field(default=None, min_length=1, max_length=255)
     meeting_type: MeetingType | None = Field(default=None, alias="meetingType")
-    raw_text: str | None = Field(default=None, alias="rawText")
-    cleaned_text: str | None = Field(default=None, alias="cleanedText")
+    raw_text: str | None = Field(
+        default=None, max_length=MAX_MEETING_TEXT_CHARS, alias="rawText"
+    )
+    cleaned_text: str | None = Field(
+        default=None, max_length=MAX_MEETING_TEXT_CHARS, alias="cleanedText"
+    )
     source_type: SourceType | None = Field(default=None, alias="sourceType")
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=MAX_MEETING_NOTES_CHARS)
 
     @field_validator("source_key", "filename")
     @classmethod

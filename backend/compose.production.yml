@@ -26,6 +26,7 @@ services:
     volumes:
       - backend_model_cache:/home/app/.cache/huggingface
     restart: unless-stopped
+    stop_grace_period: 45s
 
   proxy:
     build:

@@ -27,6 +27,7 @@ RUN uv sync --locked --no-dev --no-install-project --extra postgres --extra auth
 COPY --chown=app:app \
     app.py \
     auth.py \
+    auth_rate_limit.py \
     auth_models.py \
     database.py \
     llm.py \
@@ -51,4 +52,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5m --retries=3 CMD ["pyth
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "600"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "600", "--timeout-graceful-shutdown", "30"]

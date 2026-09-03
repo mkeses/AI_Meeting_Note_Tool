@@ -12,6 +12,9 @@ COMPOSE_CONFIGURATION = (BACKEND_DIRECTORY / "compose.production.yml").read_text
 PWA_DOCKERFILE = (FRONTEND_DIRECTORY / "Dockerfile.production").read_text(
     encoding="utf-8"
 )
+BACKEND_DOCKERFILE = (BACKEND_DIRECTORY / "Dockerfile.production").read_text(
+    encoding="utf-8"
+)
 SERVICE_WORKER = (FRONTEND_DIRECTORY / "public" / "service-worker.js").read_text(
     encoding="utf-8"
 )
@@ -73,6 +76,12 @@ def test_proxy_builds_and_serves_the_pwa_without_exposing_internal_services():
     assert "COPY --from=build /app/dist /usr/share/nginx/html" in PWA_DOCKERFILE
 
 
+def test_production_backend_image_includes_authentication_abuse_protection():
+    assert "auth_rate_limit.py" in BACKEND_DOCKERFILE
+    assert '"--timeout-graceful-shutdown", "30"' in BACKEND_DOCKERFILE
+    assert "stop_grace_period: 45s" in compose_service("backend")
+
+
 def test_proxy_serves_pwa_routes_without_capturing_api_or_websocket_requests():
     assert "root /usr/share/nginx/html;" in PROXY_CONFIGURATION
     assert "location / {\n    try_files $uri $uri/ /index.html;" in PROXY_CONFIGURATION
@@ -128,3 +137,9 @@ def test_proxy_limits_allow_the_application_audio_limit_with_multipart_overhead(
     assert "X-Content-Type-Options" in PROXY_CONFIGURATION
     assert "Referrer-Policy" in PROXY_CONFIGURATION
     assert "X-Frame-Options" in PROXY_CONFIGURATION
+
+
+def test_proxy_uses_a_smaller_body_limit_for_non_upload_api_requests():
+    assert "location = /api/transcribe" in PROXY_CONFIGURATION
+    assert "location = /api {\n    client_max_body_size 4m;" in PROXY_CONFIGURATION
+    assert "location ^~ /api/ {\n    client_max_body_size 4m;" in PROXY_CONFIGURATION

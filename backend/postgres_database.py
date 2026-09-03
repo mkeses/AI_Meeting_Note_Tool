@@ -26,6 +26,9 @@ except ImportError:  # pragma: no cover - deployment without PostgreSQL support
     dict_row = None
 
 
+POSTGRES_CONNECT_TIMEOUT_SECONDS = 10
+
+
 class PostgresMeetingRepository:
     """Connection-per-operation PostgreSQL storage with auth and owner scopes."""
 
@@ -414,7 +417,11 @@ class PostgresMeetingRepository:
             raise MeetingStorageError(
                 "PostgreSQL meeting storage requires the optional 'postgres' dependency"
             )
-        return psycopg.connect(self.database_url, row_factory=dict_row)
+        return psycopg.connect(
+            self.database_url,
+            row_factory=dict_row,
+            connect_timeout=POSTGRES_CONNECT_TIMEOUT_SECONDS,
+        )
 
     @staticmethod
     def _to_tsquery(query: str) -> str:

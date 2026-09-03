@@ -158,6 +158,52 @@ The supplied stack hosts the PWA through the same HTTPS origin. If deploying a
 separate frontend host instead, add that exact origin to `REMOTE_CORS_ORIGINS`
 and validate browser cookie behavior before release.
 
+## Operational limits and failure behavior
+
+Production applies a small, process-local authentication-attempt limiter to
+registration and failed login attempts: five attempts per client address and
+endpoint over sixty seconds. The sixth attempt returns `429` with a
+`Retry-After` header. A successful login clears that login's failed-attempt
+state. The limiter stores only endpoint/client-address keys and monotonic
+timestamps, has a 10,000-entry cap, and expires old entries during normal use;
+it never stores or logs passwords. It is intentionally per process, so it is
+appropriate only for this single-instance Compose deployment. Deployments that
+add replicas need an edge or shared-store rate limiter.
+
+Nginx allows only the audio-upload route to reach its 257 MiB multipart limit;
+all other API routes have a 4 MiB body limit. FastAPI independently rejects
+audio files above 256 MiB, JSON requests whose declared body exceeds 4 MiB,
+cleanup and meeting transcript fields above one million characters, custom
+cleanup prompts above 100,000 characters, meeting notes above 250,000
+characters, and search terms above 256 characters.
+Validation errors are safe `4xx` responses and do not echo submitted secrets
+or transcript text.
+
+The remote WebSocket keeps its existing session-cookie and exact-Origin checks,
+16 KiB control-frame limit, 1 MiB audio-frame limit, and 256 MiB authenticated
+audio-session limit. Nginx's existing one-hour upstream read/send timeouts
+bound abandoned proxied connections without cutting off legitimate long
+transcription work. On a container stop, Uvicorn allows up to 30 seconds for
+in-flight work and Compose allows 45 seconds before force-stopping the backend.
+Disconnects and ASGI shutdown cancellation run the handler's existing cleanup
+path, which cancels in-flight live-transcription tasks; the backend does not
+attempt a final transcription after a disconnect.
+
+LLM connections and requests use `LLM_TIMEOUT_SECONDS` (30 seconds by default)
+and failures remain safe `502` responses, leaving raw transcripts available to
+the caller. PostgreSQL uses one connection per operation with a ten-second
+connect timeout; initialization errors prevent `/api/ready` from succeeding,
+while runtime storage failures become safe `503` responses. `/api/health` is a
+cheap liveness response, `/api/ready` reflects initialized model/storage/auth
+dependencies, and `/api/status` remains the desktop compatibility endpoint
+without provider URLs, credentials, or keys.
+
+Operational logs contain lifecycle and failure categories only. They do not log
+request bodies, transcripts, uploads, passwords, session or CSRF tokens, API
+keys, LLM URLs, cookies, authorization headers, or database connection strings.
+The Nginx privacy log format continues to omit query strings and request
+headers.
+
 ## Health endpoints
 
 - `GET /api/health` is a liveness response with no configuration details.

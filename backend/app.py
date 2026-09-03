@@ -25,7 +25,7 @@ from fastapi import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from scipy.signal import resample_poly
 
 from auth import (
@@ -39,6 +39,7 @@ from auth import (
     verify_password,
 )
 from auth_models import AuthenticatedUserResponse, AuthenticationRequest
+from auth_rate_limit import AuthenticationAttemptLimiter
 from llm import MeetingIntelligenceError
 from meeting_models import MeetingCreate, MeetingResponse, MeetingUpdate
 from settings import Settings, remote_cors_origins_from_environment
@@ -64,6 +65,12 @@ VITE_CORS_ORIGINS = [
 ]
 ELECTRON_RENDERER_ORIGIN = "meeting://renderer"
 CSRF_HEADER_NAME = "X-CSRF-Token"
+MAX_JSON_REQUEST_BYTES = 4 * 1024 * 1024
+MAX_CLEAN_TEXT_CHARS = 1_000_000
+MAX_SYSTEM_PROMPT_CHARS = 100_000
+AUTH_RATE_LIMIT_MAX_ATTEMPTS = 5
+AUTH_RATE_LIMIT_WINDOW_SECONDS = 60
+AUTH_RATE_LIMIT_MAX_ENTRIES = 10_000
 
 
 def get_allowed_cors_origins() -> list[str]:
@@ -87,8 +94,8 @@ def get_allowed_cors_origins() -> list[str]:
 class CleanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    text: str
-    system_prompt: str | None = None
+    text: str = Field(max_length=MAX_CLEAN_TEXT_CHARS)
+    system_prompt: str | None = Field(default=None, max_length=MAX_SYSTEM_PROMPT_CHARS)
     meeting_type: str = "general"
 
 
@@ -99,6 +106,7 @@ service: TranscriptionService | None = None
 meeting_repository: MeetingStore | None = None
 authentication_store: AuthenticationStore | None = None
 application_settings: Settings | None = None
+authentication_attempt_limiter: AuthenticationAttemptLimiter | None = None
 
 # --- Live transcription windowing constants ---
 
@@ -145,7 +153,8 @@ LIVE_VAD_PARAMETERS = {"min_speech_duration_ms": 100}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize the local Whisper and LLM-backed transcription service."""
-    global application_settings, authentication_store, meeting_repository, service
+    global application_settings, authentication_attempt_limiter
+    global authentication_store, meeting_repository, service
 
     print("Starting AI Transcript App...")
 
@@ -163,6 +172,12 @@ async def lifespan(app: FastAPI):
         meeting_repository = create_meeting_store(settings)
         meeting_repository.initialize()
         authentication_store = create_authentication_store(settings, meeting_repository)
+        if settings.app_environment == "production" and settings.auth_enabled:
+            authentication_attempt_limiter = AuthenticationAttemptLimiter(
+                max_attempts=AUTH_RATE_LIMIT_MAX_ATTEMPTS,
+                window_seconds=AUTH_RATE_LIMIT_WINDOW_SECONDS,
+                max_entries=AUTH_RATE_LIMIT_MAX_ENTRIES,
+            )
 
         print("Ready!")
         yield
@@ -170,6 +185,7 @@ async def lifespan(app: FastAPI):
         meeting_repository = None
         service = None
         authentication_store = None
+        authentication_attempt_limiter = None
         application_settings = None
 
 
@@ -199,6 +215,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def limit_json_request_body(request: Request, call_next):
+    """Reject oversized JSON early without changing multipart upload handling."""
+    content_type = request.headers.get("content-type", "").lower()
+    content_length = request.headers.get("content-length")
+    if "application/json" in content_type and content_length:
+        try:
+            length = int(content_length)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid request"})
+        if length < 0:
+            return JSONResponse(status_code=400, content={"detail": "Invalid request"})
+        if length > MAX_JSON_REQUEST_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Request body is too large"},
+            )
+    return await call_next(request)
 
 
 def application_status() -> str:
@@ -252,14 +288,14 @@ def get_authentication_store() -> AuthenticationStore:
 
 
 def raise_storage_http_error(error: MeetingStorageError) -> None:
-    print(f"Meeting storage error: {error}")
+    print("Meeting storage error")
     raise HTTPException(
         status_code=503, detail="Meeting storage is unavailable"
     ) from error
 
 
 def raise_authentication_storage_http_error(error: AuthenticationStorageError) -> None:
-    print(f"Authentication storage error: {error}")
+    print("Authentication storage error")
     raise HTTPException(
         status_code=503, detail="Authentication storage is unavailable"
     ) from error
@@ -326,6 +362,32 @@ def require_state_changing_request_access(request: Request) -> None:
     require_csrf_protection(request)
 
 
+def get_authentication_attempt_key(request: Request, endpoint: str) -> str | None:
+    """Use a production proxy's client address without retaining credentials."""
+    if authentication_attempt_limiter is None:
+        return None
+
+    client_host = request.headers.get("X-Real-IP")
+    if not client_host and request.client is not None:
+        client_host = request.client.host
+    return f"{endpoint}:{(client_host or 'unknown')[:128]}"
+
+
+def require_authentication_attempt_available(
+    request: Request, endpoint: str
+) -> str | None:
+    key = get_authentication_attempt_key(request, endpoint)
+    if key is None or not authentication_attempt_limiter.is_limited(key):
+        return key
+
+    retry_after = authentication_attempt_limiter.retry_after_seconds(key)
+    raise HTTPException(
+        status_code=429,
+        detail="Too many authentication attempts. Please try again later.",
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
 @app.get("/api/auth/csrf")
 def get_csrf_token(response: Response) -> dict[str, str]:
     """Issue a short-lived signed token for the browser's unsafe REST requests."""
@@ -343,8 +405,13 @@ def get_csrf_token(response: Response) -> dict[str, str]:
 )
 def register(
     credentials: AuthenticationRequest,
+    request: Request,
     _csrf: Annotated[None, Depends(require_csrf_protection)],
 ) -> AuthenticatedUserResponse:
+    attempt_key = require_authentication_attempt_available(request, "register")
+    if attempt_key is not None:
+        authentication_attempt_limiter.record_attempt(attempt_key)
+
     try:
         user = get_authentication_store().create_user(
             credentials.login, hash_password(credentials.password)
@@ -360,16 +427,23 @@ def register(
 @app.post("/api/auth/login", response_model=AuthenticatedUserResponse)
 def login(
     credentials: AuthenticationRequest,
+    request: Request,
     response: Response,
     _csrf: Annotated[None, Depends(require_csrf_protection)],
 ) -> AuthenticatedUserResponse:
+    attempt_key = require_authentication_attempt_available(request, "login")
     try:
         stored_user = get_authentication_store().get_user_by_login(credentials.login)
     except AuthenticationStorageError as error:
         raise_authentication_storage_http_error(error)
 
     if stored_user is None or not verify_password(credentials.password, stored_user[1]):
+        if attempt_key is not None:
+            authentication_attempt_limiter.record_attempt(attempt_key)
         raise HTTPException(status_code=401, detail="Invalid login or password")
+
+    if attempt_key is not None:
+        authentication_attempt_limiter.reset(attempt_key)
 
     settings = get_application_settings()
     assert settings.auth_session_secret is not None
