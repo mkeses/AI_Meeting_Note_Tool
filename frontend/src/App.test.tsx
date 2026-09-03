@@ -14,6 +14,14 @@ type SocketMessageHandler = (event: MessageEvent) => void;
 
 const audioCaptureState = vi.hoisted(() => ({
   onSocketMessage: undefined as SocketMessageHandler | undefined,
+  startCalls: 0,
+  stopCalls: 0,
+}));
+
+const browserAudioCaptureState = vi.hoisted(() => ({
+  onSocketMessage: undefined as SocketMessageHandler | undefined,
+  startCalls: 0,
+  stopCalls: 0,
 }));
 
 const cleanupState = vi.hoisted(() => ({
@@ -57,6 +65,7 @@ vi.mock('./hooks/useAudioCapture', async () => {
         recordingSourceKeyRef: MutableRefObject<string | null>,
         onSocketMessage?: SocketMessageHandler
       ) => {
+        audioCaptureState.startCalls += 1;
         audioCaptureState.onSocketMessage = onSocketMessage;
         setSessionFilename('recording.webm');
         setSessionInputType('recording');
@@ -68,9 +77,46 @@ vi.mock('./hooks/useAudioCapture', async () => {
       return {
         isRecording,
         startRecording,
-        stopRecording: () => setIsRecording(false),
+        stopRecording: () => {
+          audioCaptureState.stopCalls += 1;
+          setIsRecording(false);
+        },
         getAudioBlob: () => null,
         cleanupAudioCapture: () => Promise.resolve(),
+      };
+    },
+  };
+});
+
+vi.mock('./hooks/useBrowserAudioCapture', async () => {
+  const React = await import('react');
+
+  return {
+    useBrowserAudioCapture: (options: {
+      onSocketMessage?: SocketMessageHandler;
+    }) => {
+      const [isRecording, setIsRecording] = React.useState(false);
+      const [recordingSeconds, setRecordingSeconds] = React.useState(0);
+      const liveSocketRef = React.useRef<WebSocket | null>(null);
+
+      browserAudioCaptureState.onSocketMessage = options.onSocketMessage;
+
+      return {
+        cleanupAudioCapture: () => undefined,
+        error: null,
+        isRecording,
+        liveSocketRef,
+        recordingSeconds,
+        startRecording: () => {
+          browserAudioCaptureState.startCalls += 1;
+          setIsRecording(true);
+          setRecordingSeconds(7);
+          return Promise.resolve();
+        },
+        stopRecording: () => {
+          browserAudioCaptureState.stopCalls += 1;
+          setIsRecording(false);
+        },
       };
     },
   };
@@ -184,6 +230,11 @@ function createSession(overrides: Partial<SavedSession> = {}): SavedSession {
 describe('App live transcript editor', () => {
   beforeEach(() => {
     audioCaptureState.onSocketMessage = undefined;
+    audioCaptureState.startCalls = 0;
+    audioCaptureState.stopCalls = 0;
+    browserAudioCaptureState.onSocketMessage = undefined;
+    browserAudioCaptureState.startCalls = 0;
+    browserAudioCaptureState.stopCalls = 0;
     cleanupState.cleanTranscription.mockClear();
     cleanupState.regenerateCleanup.mockClear();
     meetingReportState.downloadMeetingReportPdf.mockClear();
@@ -212,6 +263,18 @@ describe('App live transcript editor', () => {
     const user = userEvent.setup();
 
     render(<App />);
+
+    expect(
+      screen.getByText(
+        'Record your computer and microphone audio, or upload an existing file.'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Upload audio file' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('switch', { name: 'Include microphone' })
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Start recording' }));
 
@@ -308,7 +371,7 @@ describe('App live transcript editor', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('keeps the authenticated workspace shell while hiding capture controls', async () => {
+  it('keeps the authenticated workspace shell while hiding desktop-only controls', async () => {
     authState.value.status = 'authenticated';
     authState.value.user = { login: 'matth' };
     const session = createSession();
@@ -338,6 +401,12 @@ describe('App live transcript editor', () => {
       screen.getByRole('heading', { name: 'Meeting workspace' })
     ).toBeInTheDocument();
     expect(screen.getByText('Processing setup')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Start recording' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Record microphone audio for a live remote transcript.')
+    ).toBeInTheDocument();
 
     await user.click(
       screen.getByRole('button', { name: /^architecture review/i })
@@ -368,21 +437,54 @@ describe('App live transcript editor', () => {
     );
 
     expect(
-      screen.queryByRole('button', { name: 'Start recording' })
-    ).not.toBeInTheDocument();
+      screen.getByRole('button', { name: 'Upload audio file' })
+    ).toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: 'Upload audio file' })
-    ).not.toBeInTheDocument();
+      screen.getByText('Use an existing text transcript')
+    ).toBeInTheDocument();
     expect(
-      screen.queryByText('Use an existing text transcript')
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('switch', { name: 'Include microphone' })
-    ).not.toBeInTheDocument();
+      screen.getByRole('switch', { name: 'Include microphone' })
+    ).toBeInTheDocument();
     expect(screen.getByText('Private workspace')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Sign out' }));
     expect(authState.value.logout).toHaveBeenCalledOnce();
+  });
+
+  it('uses browser microphone capture for authenticated recording', async () => {
+    authState.value.status = 'authenticated';
+    authState.value.user = { login: 'matth' };
+    fetchMock.mockResolvedValueOnce(jsonResponse([]));
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Start recording' }));
+
+    expect(browserAudioCaptureState.startCalls).toBe(1);
+    expect(audioCaptureState.startCalls).toBe(0);
+    expect(
+      screen.getByRole('button', { name: 'Stop recording' })
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('00:00:07')).toHaveLength(2);
+    expect(screen.getByText('Live transcript')).toBeInTheDocument();
+
+    act(() => {
+      browserAudioCaptureState.onSocketMessage?.(
+        transcriptMessage('remote transcript', 'still listening')
+      );
+    });
+    expect(
+      screen.getByRole('textbox', { name: 'Committed live transcript' })
+    ).toHaveValue('remote transcript');
+    expect(
+      screen.getByLabelText('Provisional text, still being transcribed')
+    ).toHaveTextContent('still listening');
+
+    await user.click(screen.getByRole('button', { name: 'Stop recording' }));
+
+    expect(browserAudioCaptureState.stopCalls).toBe(1);
+    expect(audioCaptureState.stopCalls).toBe(0);
   });
 
   it('exports a PDF using the active saved meeting data', async () => {
