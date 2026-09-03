@@ -199,10 +199,33 @@ app.add_middleware(
 )
 
 
+def application_status() -> str:
+    """Return a safe lifecycle status without exposing runtime configuration."""
+    if application_settings is None or service is None or meeting_repository is None:
+        return "initializing"
+    if application_settings.auth_enabled and authentication_store is None:
+        return "initializing"
+    return "ready"
+
+
+@app.get("/api/health")
+async def get_health():
+    """Liveness signal that intentionally exposes no configuration details."""
+    return {"status": "alive"}
+
+
+@app.get("/api/ready")
+async def get_ready():
+    """Readiness signal for container orchestration after startup completes."""
+    if application_status() != "ready":
+        raise HTTPException(status_code=503, detail="Service not ready")
+    return {"status": "ready"}
+
+
 @app.get("/api/status")
 async def get_status():
     return {
-        "status": "ready" if service else "initializing",
+        "status": application_status(),
         "whisper_model": os.getenv("WHISPER_MODEL"),
         "llm_model": os.getenv("LLM_MODEL"),
     }

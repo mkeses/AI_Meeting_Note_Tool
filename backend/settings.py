@@ -45,6 +45,7 @@ def remote_cors_origins_from_environment() -> list[str]:
 
 @dataclass(frozen=True, slots=True)
 class Settings:
+    app_environment: str
     whisper_model: str
     llm_base_url: str
     llm_api_key: str | None
@@ -63,6 +64,10 @@ class Settings:
 
     @classmethod
     def from_environment(cls) -> "Settings":
+        app_environment = os.getenv("APP_ENV", "local").lower()
+        if app_environment not in {"local", "production"}:
+            raise RuntimeError("APP_ENV must be either 'local' or 'production'")
+
         values = {
             "WHISPER_MODEL": os.getenv("WHISPER_MODEL"),
             "LLM_BASE_URL": os.getenv("LLM_BASE_URL"),
@@ -87,6 +92,7 @@ class Settings:
 
         auth_enabled = os.getenv("AUTH_ENABLED", "0") == "1"
         auth_session_secret = os.getenv("AUTH_SESSION_SECRET")
+        auth_cookie_secure = os.getenv("AUTH_COOKIE_SECURE", "1") == "1"
         llm_api_key = os.getenv("LLM_API_KEY")
         try:
             auth_session_lifetime_seconds = int(
@@ -118,7 +124,18 @@ class Settings:
         if llm_timeout_seconds <= 0:
             raise RuntimeError("LLM_TIMEOUT_SECONDS must be positive")
 
+        if app_environment == "production":
+            if storage_backend != "postgresql" or not auth_enabled:
+                raise RuntimeError(
+                    "APP_ENV=production requires authenticated PostgreSQL storage"
+                )
+            if not auth_cookie_secure:
+                raise RuntimeError("APP_ENV=production requires AUTH_COOKIE_SECURE=1")
+            if not remote_cors_origins_from_environment():
+                raise RuntimeError("APP_ENV=production requires REMOTE_CORS_ORIGINS")
+
         return cls(
+            app_environment=app_environment,
             whisper_model=values["WHISPER_MODEL"],
             llm_base_url=values["LLM_BASE_URL"],
             llm_api_key=llm_api_key,
@@ -130,7 +147,7 @@ class Settings:
             auth_enabled=auth_enabled,
             auth_session_secret=auth_session_secret,
             auth_session_lifetime_seconds=auth_session_lifetime_seconds,
-            auth_cookie_secure=os.getenv("AUTH_COOKIE_SECURE", "1") == "1",
+            auth_cookie_secure=auth_cookie_secure,
             auth_cookie_name=os.getenv("AUTH_COOKIE_NAME", "ai_meeting_session"),
             electron_desktop_mode=os.getenv("ELECTRON_DESKTOP_MODE") == "1",
             electron_renderer_origin=os.getenv("ELECTRON_RENDERER_ORIGIN"),

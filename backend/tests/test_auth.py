@@ -315,6 +315,26 @@ def test_status_does_not_expose_the_llm_api_key(remote_client) -> None:
     assert "llm_base_url" not in response.json()
 
 
+def test_health_and_readiness_endpoints_are_safe_and_distinct(remote_client) -> None:
+    client, _store = remote_client
+
+    assert client.get("/api/health").json() == {"status": "alive"}
+    assert client.get("/api/ready").json() == {"status": "ready"}
+
+
+def test_readiness_returns_safe_service_unavailable_response(
+    remote_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _store = remote_client
+    monkeypatch.setattr(backend_app, "service", None)
+
+    response = client.get("/api/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Service not ready"}
+
+
 def test_clean_endpoint_returns_a_safe_provider_failure(
     remote_client,
     monkeypatch: pytest.MonkeyPatch,

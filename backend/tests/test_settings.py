@@ -112,3 +112,49 @@ def test_llm_timeout_is_configured_server_side(
     settings = Settings.from_environment()
 
     assert settings.llm_timeout_seconds == 12.5
+
+
+def configure_production_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("WHISPER_MODEL", "base.en")
+    monkeypatch.setenv("LLM_BASE_URL", "https://provider.example.test/v1")
+    monkeypatch.setenv("LLM_MODEL", "remote-model")
+    monkeypatch.setenv("MEETING_STORAGE_BACKEND", "postgresql")
+    monkeypatch.setenv("POSTGRES_DATABASE_URL", "postgresql://test")
+    monkeypatch.setenv("AUTH_ENABLED", "1")
+    monkeypatch.setenv("AUTH_SESSION_SECRET", "s" * 32)
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "1")
+    monkeypatch.setenv("REMOTE_CORS_ORIGINS", "https://app.example.test")
+
+
+def test_production_settings_require_secure_authenticated_remote_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_production_environment(monkeypatch)
+
+    settings = Settings.from_environment()
+
+    assert settings.app_environment == "production"
+    assert settings.storage_backend == "postgresql"
+    assert settings.auth_enabled is True
+    assert settings.auth_cookie_secure is True
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("AUTH_COOKIE_SECURE", "0", "AUTH_COOKIE_SECURE=1"),
+        ("REMOTE_CORS_ORIGINS", "", "REMOTE_CORS_ORIGINS"),
+    ],
+)
+def test_production_settings_fail_fast_for_missing_browser_security(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    value: str,
+    message: str,
+) -> None:
+    configure_production_environment(monkeypatch)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(RuntimeError, match=message):
+        Settings.from_environment()

@@ -50,6 +50,13 @@ dist/
 
 # Environment
 .env
+.env.*
+!.env.example
+!.env.production.example
+
+# Production TLS material is mounted into the reverse proxy and must never be
+# committed or included in a backend image build context.
+backend/certs/
 
 # Frontend
 frontend/node_modules/
