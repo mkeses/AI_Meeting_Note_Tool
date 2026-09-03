@@ -58,11 +58,23 @@ def test_configured_remote_origins_are_allowed_for_cookie_requests(monkeypatch) 
     with TestClient(cors_test_app) as client:
         allowed = client.get("/health", headers={"Origin": remote_origin})
         denied = client.get("/health", headers={"Origin": "https://untrusted.example"})
+        csrf_preflight = client.options(
+            "/health",
+            headers={
+                "Origin": remote_origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "X-CSRF-Token",
+            },
+        )
 
     assert get_allowed_cors_origins() == [*VITE_CORS_ORIGINS, remote_origin]
     assert allowed.headers["access-control-allow-origin"] == remote_origin
     assert allowed.headers["access-control-allow-credentials"] == "true"
     assert "access-control-allow-origin" not in denied.headers
+    assert csrf_preflight.headers["access-control-allow-origin"] == remote_origin
+    assert (
+        "x-csrf-token" in csrf_preflight.headers["access-control-allow-headers"].lower()
+    )
 
 
 def test_authenticated_mode_does_not_add_unconfigured_development_origins(

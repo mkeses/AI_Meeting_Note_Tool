@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { fetchApiUrl } from '../api';
 import { getBackendApiUrl } from '../config';
 
 export type MeetingType =
@@ -120,7 +121,7 @@ async function fetchMeetingJson(
   init?: RequestInit,
   onUnauthenticated?: () => void
 ): Promise<unknown> {
-  const response = await fetch(url, { ...init, credentials: 'include' });
+  const response = await fetchApiUrl(url, init);
 
   if (response.status === 401) {
     onUnauthenticated?.();
@@ -491,12 +492,9 @@ export function useMeetingSessions({
       }
 
       try {
-        const response = await fetch(
+        const response = await fetchApiUrl(
           getBackendApiUrl(`/api/meetings/${encodeURIComponent(sessionId)}`),
-          {
-            method: 'DELETE',
-            credentials: 'include',
-          }
+          { method: 'DELETE' }
         );
 
         if (response.status === 401) {

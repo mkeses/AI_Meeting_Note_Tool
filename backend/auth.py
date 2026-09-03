@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+import time
 from datetime import UTC, datetime, timedelta
 
 
@@ -35,6 +36,40 @@ def hash_session_token(token: str, secret: str) -> str:
     return hmac.new(
         secret.encode("utf-8"), token.encode("utf-8"), hashlib.sha256
     ).hexdigest()
+
+
+def create_csrf_token(secret: str) -> str:
+    """Create a signed, browser-readable token for unsafe REST requests."""
+    issued_at = str(int(time.time()))
+    nonce = secrets.token_urlsafe(32)
+    payload = f"{issued_at}.{nonce}"
+    signature = hmac.new(
+        secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def verify_csrf_token(token: str, secret: str, lifetime_seconds: int) -> bool:
+    """Validate a bounded signed CSRF token without storing it server-side."""
+    if len(token) > 512:
+        return False
+
+    try:
+        issued_at, nonce, signature = token.split(".")
+        issued_at_seconds = int(issued_at)
+    except (TypeError, ValueError):
+        return False
+
+    if not nonce or issued_at_seconds > time.time() + 60:
+        return False
+    if time.time() - issued_at_seconds > lifetime_seconds:
+        return False
+
+    payload = f"{issued_at}.{nonce}"
+    expected_signature = hmac.new(
+        secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(signature, expected_signature)
 
 
 def session_expiration(now: datetime, lifetime_seconds: int) -> datetime:

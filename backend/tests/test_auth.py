@@ -8,10 +8,12 @@ from fastapi.testclient import TestClient
 
 import app as backend_app
 from auth import (
+    create_csrf_token,
     create_session_token,
     hash_password,
     hash_session_token,
     utc_now,
+    verify_csrf_token,
     verify_password,
 )
 from meeting_entity import Meeting
@@ -156,12 +158,32 @@ def remote_client(monkeypatch: pytest.MonkeyPatch):
 
 def register(client: TestClient, login: str, password: str = "correct-password"):
     return client.post(
-        "/api/auth/register", json={"login": login, "password": password}
+        "/api/auth/register",
+        json={"login": login, "password": password},
+        headers=csrf_headers(client),
     )
 
 
 def login(client: TestClient, login: str, password: str = "correct-password"):
-    return client.post("/api/auth/login", json={"login": login, "password": password})
+    headers = csrf_headers(client)
+    response = client.post(
+        "/api/auth/login",
+        json={"login": login, "password": password},
+        headers=headers,
+    )
+    if response.is_success:
+        client.headers.update(headers)
+    return response
+
+
+def csrf_headers(client: TestClient) -> dict[str, str]:
+    response = client.get("/api/auth/csrf")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    token = response.json()["csrfToken"]
+    assert isinstance(token, str)
+    return {backend_app.CSRF_HEADER_NAME: token}
 
 
 def test_password_hashing_never_returns_the_plaintext_password() -> None:
@@ -170,6 +192,92 @@ def test_password_hashing_never_returns_the_plaintext_password() -> None:
     assert password_hash != "correct-password"
     assert verify_password("correct-password", password_hash)
     assert not verify_password("wrong-password", password_hash)
+
+
+def test_csrf_tokens_are_signed_and_reject_tampering() -> None:
+    token = create_csrf_token("s" * 32)
+
+    assert verify_csrf_token(token, "s" * 32, 60)
+    assert not verify_csrf_token(f"{token}tampered", "s" * 32, 60)
+    assert not verify_csrf_token("x" * 513, "s" * 32, 60)
+
+
+def test_remote_mutations_require_a_valid_csrf_token(remote_client) -> None:
+    client, _store = remote_client
+
+    missing = client.post(
+        "/api/auth/register",
+        json={"login": "alice", "password": "correct-password"},
+    )
+    assert missing.status_code == 403
+    assert missing.json() == {"detail": "CSRF validation failed"}
+
+    register(client, "alice")
+    login(client, "alice")
+
+    client.headers.pop(backend_app.CSRF_HEADER_NAME)
+    missing = client.post("/api/meetings", json=meeting_payload())
+    assert missing.status_code == 403
+    assert missing.json() == {"detail": "CSRF validation failed"}
+
+    hostile_token = "hostile-token" * 100
+    invalid = client.post(
+        "/api/meetings",
+        json=meeting_payload(),
+        headers={backend_app.CSRF_HEADER_NAME: hostile_token},
+    )
+    assert invalid.status_code == 403
+    assert invalid.json() == {"detail": "CSRF validation failed"}
+    assert hostile_token not in invalid.text
+
+
+def test_safe_remote_get_requests_do_not_require_csrf(remote_client) -> None:
+    client, _store = remote_client
+    register(client, "alice")
+    login(client, "alice")
+    client.headers.pop(backend_app.CSRF_HEADER_NAME)
+
+    assert client.get("/api/meetings").status_code == 200
+
+
+def test_remote_cleanup_and_upload_require_csrf_after_authentication(
+    remote_client,
+) -> None:
+    client, _store = remote_client
+    register(client, "alice")
+    login(client, "alice")
+    client.headers.pop(backend_app.CSRF_HEADER_NAME)
+
+    cleanup = client.post("/api/clean", json={"text": "private transcript"})
+    upload = client.post(
+        "/api/transcribe",
+        files={"audio": ("recording.webm", b"audio", "audio/webm")},
+    )
+
+    assert cleanup.status_code == 403
+    assert cleanup.json() == {"detail": "CSRF validation failed"}
+    assert upload.status_code == 403
+    assert upload.json() == {"detail": "CSRF validation failed"}
+
+
+def test_production_session_cookie_keeps_secure_attributes(
+    remote_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _store = remote_client
+    settings = backend_app.get_application_settings()
+    monkeypatch.setattr(
+        backend_app,
+        "application_settings",
+        replace(settings, auth_cookie_secure=True),
+    )
+    register(client, "alice")
+
+    response = login(client, "alice")
+
+    assert "HttpOnly" in response.headers["set-cookie"]
+    assert "Secure" in response.headers["set-cookie"]
+    assert "SameSite=lax" in response.headers["set-cookie"]
 
 
 def test_registration_login_current_user_and_logout(remote_client) -> None:

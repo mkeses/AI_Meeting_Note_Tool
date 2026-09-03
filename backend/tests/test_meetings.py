@@ -99,6 +99,14 @@ def test_create_list_and_retrieve_meetings(api_client: TestClient) -> None:
     assert get_response.json() == created
 
 
+def test_local_meeting_mutations_remain_auth_and_csrf_free(
+    api_client: TestClient,
+) -> None:
+    response = api_client.post("/api/meetings", json=meeting_payload())
+
+    assert response.status_code == 201
+
+
 def test_partial_update_preserves_unspecified_fields_and_other_meetings(
     api_client: TestClient,
 ) -> None:

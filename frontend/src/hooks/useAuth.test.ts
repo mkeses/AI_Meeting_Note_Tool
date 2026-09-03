@@ -16,6 +16,7 @@ const user = {
   login: 'matth',
   createdAt: '2026-09-02T12:00:00.000Z',
 };
+const csrfToken = 'signed-csrf-token';
 
 describe('useAuth', () => {
   beforeEach(() => {
@@ -44,7 +45,9 @@ describe('useAuth', () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ detail: 'Sign in required' }, 401)
     );
+    fetchMock.mockResolvedValueOnce(jsonResponse({ csrfToken }));
     fetchMock.mockResolvedValueOnce(jsonResponse(user));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ csrfToken }));
 
     const { result } = renderHook(() => useAuth());
     await waitFor(() => expect(result.current.status).toBe('unauthenticated'));
@@ -53,15 +56,18 @@ describe('useAuth', () => {
       await result.current.login('matth', 'not-stored-in-browser');
     });
 
-    expect(fetchMock).toHaveBeenLastCalledWith('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        login: 'matth',
-        password: 'not-stored-in-browser',
-      }),
-      credentials: 'include',
-    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/auth/login',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          login: 'matth',
+          password: 'not-stored-in-browser',
+        }),
+        credentials: 'include',
+      })
+    );
     expect(result.current.status).toBe('authenticated');
     expect(result.current.user).toEqual(user);
   });
@@ -70,6 +76,7 @@ describe('useAuth', () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ detail: 'Sign in required' }, 401)
     );
+    fetchMock.mockResolvedValueOnce(jsonResponse({ csrfToken }));
     fetchMock.mockResolvedValueOnce(jsonResponse(user, 201));
 
     const { result } = renderHook(() => useAuth());
@@ -83,6 +90,15 @@ describe('useAuth', () => {
     expect(result.current.user).toBeNull();
     expect(result.current.message).toBe(
       'Account created. Sign in to open your workspace.'
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/auth/register',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ login: 'matth', password: 'new-password' }),
+        credentials: 'include',
+      })
     );
   });
 });

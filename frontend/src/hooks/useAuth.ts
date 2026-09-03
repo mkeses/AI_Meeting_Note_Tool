@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getBackendApiUrl } from '../config';
+import { clearCsrfToken, fetchApi, refreshCsrfToken } from '../api';
 
 export type AuthUser = {
   id: string;
@@ -33,10 +33,7 @@ async function authRequest(
   path: string,
   init?: RequestInit
 ): Promise<Response> {
-  return fetch(getBackendApiUrl(path), {
-    ...init,
-    credentials: 'include',
-  });
+  return fetchApi(path, init);
 }
 
 function messageFor(action: AuthAction, status: number): string {
@@ -63,6 +60,7 @@ export function useAuth() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const refresh = useCallback(async () => {
+    clearCsrfToken();
     setStatus('checking');
     setError(null);
 
@@ -76,6 +74,7 @@ export function useAuth() {
       }
 
       if (response.status === 401) {
+        await refreshCsrfToken();
         setUser(null);
         setStatus('unauthenticated');
         return;
@@ -90,6 +89,7 @@ export function useAuth() {
         throw new Error('Authentication API returned invalid user data');
       }
 
+      await refreshCsrfToken();
       setUser(responseUser);
       setStatus('authenticated');
     } catch (requestError) {
@@ -133,6 +133,7 @@ export function useAuth() {
           throw new Error('Authentication API returned invalid user data');
         }
 
+        await refreshCsrfToken();
         setUser(responseUser);
         setStatus('authenticated');
         return true;
@@ -165,6 +166,7 @@ export function useAuth() {
     } catch (logoutError) {
       console.error('Failed to end authentication session:', logoutError);
     } finally {
+      clearCsrfToken();
       setUser(null);
       setStatus('unauthenticated');
       setMessage(null);

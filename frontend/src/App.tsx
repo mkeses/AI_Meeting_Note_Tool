@@ -27,7 +27,7 @@ import type {
 } from './hooks/useMeetingSessions';
 import { usePushToTalk } from './hooks/usePushToTalk';
 import { downloadMeetingReportPdf } from './lib/meetingReportPdf';
-import { getBackendApiUrl } from './config';
+import { fetchApi } from './api';
 import { useAuth } from './hooks/useAuth';
 
 interface TranscriptionResponse {
@@ -669,7 +669,7 @@ function App() {
       formData.append('audio', audioBlob, filename);
 
       try {
-        const response = await fetch(getBackendApiUrl('/api/transcribe'), {
+        const response = await fetchApi('/api/transcribe', {
           method: 'POST',
           body: formData,
           credentials: 'include',

@@ -56,6 +56,15 @@ one exact `REMOTE_CORS_ORIGINS` entry are configured. Keep
 `AUTH_COOKIE_SECURE=1`: the browser sends the HTTP-only, SameSite=Lax session
 cookie over HTTPS and presents it to the WSS upgrade on the same host.
 
+Remote REST mutations also require an `X-CSRF-Token` header. The PWA obtains a
+short-lived signed token from `GET /api/auth/csrf` after it discovers remote
+authentication, then supplies it for registration, login, logout, meeting
+changes, cleanup, and audio upload. The token is never placed in a URL or
+persisted in browser storage. Local and Electron mode have authentication
+disabled, so they do not request or require CSRF tokens. WebSockets remain
+protected by their existing authenticated session cookie and exact Origin
+check rather than by the REST token.
+
 The supplied compose file uses `database` as its PostgreSQL hostname. For an
 externally managed PostgreSQL service, replace `POSTGRES_DATABASE_URL` with its
 TLS-capable connection string and omit the local database service if

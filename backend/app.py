@@ -29,11 +29,13 @@ from pydantic import BaseModel, ConfigDict
 from scipy.signal import resample_poly
 
 from auth import (
+    create_csrf_token,
     create_session_token,
     hash_password,
     hash_session_token,
     session_expiration,
     utc_now,
+    verify_csrf_token,
     verify_password,
 )
 from auth_models import AuthenticatedUserResponse, AuthenticationRequest
@@ -61,6 +63,7 @@ VITE_CORS_ORIGINS = [
     "http://localhost:5173",
 ]
 ELECTRON_RENDERER_ORIGIN = "meeting://renderer"
+CSRF_HEADER_NAME = "X-CSRF-Token"
 
 
 def get_allowed_cors_origins() -> list[str]:
@@ -299,6 +302,41 @@ def require_request_access(request: Request) -> None:
         get_current_user(request)
 
 
+def require_csrf_protection(request: Request) -> None:
+    """Require a valid CSRF token for remote REST state changes only."""
+    settings = get_application_settings()
+    if not settings.auth_enabled:
+        return
+
+    token = request.headers.get(CSRF_HEADER_NAME)
+    if (
+        not token
+        or not settings.auth_session_secret
+        or not verify_csrf_token(
+            token,
+            settings.auth_session_secret,
+            settings.auth_session_lifetime_seconds,
+        )
+    ):
+        raise HTTPException(status_code=403, detail="CSRF validation failed")
+
+
+def require_state_changing_request_access(request: Request) -> None:
+    """Apply remote authentication and CSRF checks without affecting local mode."""
+    require_request_access(request)
+    require_csrf_protection(request)
+
+
+@app.get("/api/auth/csrf")
+def get_csrf_token(response: Response) -> dict[str, str]:
+    """Issue a short-lived signed token for the browser's unsafe REST requests."""
+    settings = get_application_settings()
+    if not settings.auth_enabled or not settings.auth_session_secret:
+        raise HTTPException(status_code=404, detail="Authentication is not enabled")
+    response.headers["Cache-Control"] = "no-store"
+    return {"csrfToken": create_csrf_token(settings.auth_session_secret)}
+
+
 @app.post(
     "/api/auth/register",
     response_model=AuthenticatedUserResponse,
@@ -306,6 +344,7 @@ def require_request_access(request: Request) -> None:
 )
 def register(
     credentials: AuthenticationRequest,
+    _csrf: Annotated[None, Depends(require_csrf_protection)],
 ) -> AuthenticatedUserResponse:
     try:
         user = get_authentication_store().create_user(
@@ -323,6 +362,7 @@ def register(
 def login(
     credentials: AuthenticationRequest,
     response: Response,
+    _csrf: Annotated[None, Depends(require_csrf_protection)],
 ) -> AuthenticatedUserResponse:
     try:
         stored_user = get_authentication_store().get_user_by_login(credentials.login)
@@ -358,7 +398,11 @@ def login(
 
 
 @app.post("/api/auth/logout", status_code=204)
-def logout(request: Request, response: Response) -> None:
+def logout(
+    request: Request,
+    response: Response,
+    _csrf: Annotated[None, Depends(require_csrf_protection)],
+) -> None:
     settings = get_application_settings()
     if not settings.auth_enabled:
         raise HTTPException(status_code=404, detail="Authentication is not enabled")
@@ -394,6 +438,7 @@ def list_meetings(
 def create_meeting(
     meeting: MeetingCreate,
     meeting_store: CurrentMeetingStore,
+    _csrf: Annotated[None, Depends(require_csrf_protection)],
 ) -> MeetingResponse:
     settings = get_application_settings()
     if not settings.auth_enabled and meeting.created_at is None:
@@ -449,6 +494,7 @@ def update_meeting(
     meeting_id: str,
     update: MeetingUpdate,
     meeting_store: CurrentMeetingStore,
+    _csrf: Annotated[None, Depends(require_csrf_protection)],
 ) -> MeetingResponse:
     changes = update.to_changes()
     if not changes:
@@ -470,6 +516,7 @@ def update_meeting(
 def delete_meeting(
     meeting_id: str,
     meeting_store: CurrentMeetingStore,
+    _csrf: Annotated[None, Depends(require_csrf_protection)],
 ) -> Response:
     try:
         deleted = meeting_store.delete(meeting_id)
@@ -492,7 +539,7 @@ async def get_system_prompt():
 @app.post("/api/transcribe")
 async def transcribe_audio(
     audio: Annotated[UploadFile, File()],
-    _request_access: Annotated[None, Depends(require_request_access)],
+    _request_access: Annotated[None, Depends(require_state_changing_request_access)],
 ):
     if service is None:
         raise HTTPException(
@@ -542,7 +589,7 @@ async def transcribe_audio(
 @app.post("/api/clean")
 async def clean_text(
     request: CleanRequest,
-    _request_access: Annotated[None, Depends(require_request_access)],
+    _request_access: Annotated[None, Depends(require_state_changing_request_access)],
 ):
     if service is None:
         raise HTTPException(status_code=503, detail="Service not ready")
