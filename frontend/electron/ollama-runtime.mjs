@@ -6,8 +6,10 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 import {
+  PACKAGED_OLLAMA_CUDA_V12_DIRECTORY_SEGMENTS,
   PACKAGED_OLLAMA_DIRECTORY_NAME,
   PACKAGED_OLLAMA_EXECUTABLE_NAME,
+  SHARED_WHISPER_CUDA_RUNTIME_DLL_NAMES,
 } from './desktop-runtime.mjs';
 
 export const OLLAMA_VERSION = '0.34.0';
@@ -35,6 +37,23 @@ export function resolveBundledOllamaPaths({
     executablePath: pathApi.join(
       runtimeDirectory,
       PACKAGED_OLLAMA_EXECUTABLE_NAME
+    ),
+  };
+}
+
+export function resolveSharedWhisperCudaRuntimePaths({
+  runtimeDirectory,
+  pathApi = path,
+} = {}) {
+  const cudaRuntimeDirectory = pathApi.join(
+    runtimeDirectory,
+    ...PACKAGED_OLLAMA_CUDA_V12_DIRECTORY_SEGMENTS
+  );
+
+  return {
+    cudaRuntimeDirectory,
+    dllPaths: SHARED_WHISPER_CUDA_RUNTIME_DLL_NAMES.map((fileName) =>
+      pathApi.join(cudaRuntimeDirectory, fileName)
     ),
   };
 }
@@ -76,13 +95,39 @@ export function validateOllamaRuntime({
   return { sourceDirectory, executablePath };
 }
 
+export function validateSharedWhisperCudaRuntime({
+  sourceDirectory,
+  fsApi = fs,
+  pathApi = path,
+} = {}) {
+  const runtime = validateOllamaRuntime({ sourceDirectory, fsApi, pathApi });
+  const sharedRuntime = resolveSharedWhisperCudaRuntimePaths({
+    runtimeDirectory: sourceDirectory,
+    pathApi,
+  });
+
+  for (const dllPath of sharedRuntime.dllPaths) {
+    if (!fsApi.existsSync(dllPath) || !fsApi.statSync(dllPath).isFile()) {
+      throw new Error(
+        `Ollama CUDA runtime is incomplete: ${dllPath} is missing.`
+      );
+    }
+  }
+
+  return { ...runtime, ...sharedRuntime };
+}
+
 export function stageOllamaRuntime({
   sourceDirectory,
   resourcesDirectory,
   fsApi = fs,
   pathApi = path,
 } = {}) {
-  const source = validateOllamaRuntime({ sourceDirectory, fsApi, pathApi });
+  const source = validateSharedWhisperCudaRuntime({
+    sourceDirectory,
+    fsApi,
+    pathApi,
+  });
   const destination = resolveBundledOllamaPaths({
     resourcesDirectory,
     pathApi,
@@ -93,11 +138,18 @@ export function stageOllamaRuntime({
   fsApi.cpSync(source.sourceDirectory, destination.runtimeDirectory, {
     recursive: true,
   });
+  const stagedRuntime = validateSharedWhisperCudaRuntime({
+    sourceDirectory: destination.runtimeDirectory,
+    fsApi,
+    pathApi,
+  });
 
   return {
     ...source,
     destinationDirectory: destination.runtimeDirectory,
     destinationExecutablePath: destination.executablePath,
+    destinationCudaRuntimeDirectory: stagedRuntime.cudaRuntimeDirectory,
+    destinationCudaRuntimeDllPaths: stagedRuntime.dllPaths,
   };
 }
 

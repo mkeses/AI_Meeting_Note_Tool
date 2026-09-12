@@ -108,6 +108,60 @@ def test_chunk_has_speech_uses_pcm_rms_threshold() -> None:
     assert backend_app.chunk_has_speech(threshold)
 
 
+class RecordingTranscriptionService:
+    """Exercise the service boundary without exposing a raw Whisper model."""
+
+    def __init__(self, segment: SimpleNamespace) -> None:
+        self.segment = segment
+        self.calls: list[dict[str, object]] = []
+
+    def transcribe_segments(self, _audio, **kwargs):
+        self.calls.append(kwargs)
+        return [self.segment], SimpleNamespace(language="en", language_probability=1.0)
+
+
+def test_final_live_transcription_uses_the_centralized_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = RecordingTranscriptionService(SimpleNamespace(text="final text"))
+    monkeypatch.setattr(backend_app, "service", service)
+
+    result = asyncio.run(backend_app.transcribe_chunks([b"\x00\x00" * 480]))
+
+    assert result == "final text"
+    assert service.calls == [
+        {
+            "language": "en",
+            "beam_size": 1,
+            "best_of": 1,
+            "condition_on_previous_text": False,
+            "vad_filter": True,
+            "vad_parameters": backend_app.LIVE_VAD_PARAMETERS,
+        }
+    ]
+
+
+def test_windowed_live_transcription_uses_the_centralized_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    segment = SimpleNamespace(
+        text="window text",
+        start=0.0,
+        end=0.5,
+        words=[SimpleNamespace(word="window", start=0.0, end=0.5)],
+    )
+    service = RecordingTranscriptionService(segment)
+    monkeypatch.setattr(backend_app, "service", service)
+
+    segments, words = asyncio.run(
+        backend_app.transcribe_chunk_words([b"\x00\x00" * 480])
+    )
+
+    assert segments == [{"start": 0.0, "end": 0.5, "text": "window text"}]
+    assert words == [{"start": 0.0, "end": 0.5, "text": "window"}]
+    assert service.calls[0]["word_timestamps"] is True
+
+
 def test_live_transcription_emits_provisional_text_then_final_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

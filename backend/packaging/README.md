@@ -2,9 +2,9 @@
 
 The Electron app and FastAPI backend are packaged separately so the installed
 desktop app can launch a local backend without requiring an end user to have
-Python or `uv`. This first target is a **Windows x64 CPU** PyInstaller
-one-folder bundle. One-folder packaging keeps native dependency files visible
-and diagnosable; it is not an installer.
+Python or `uv`. This is a Windows x64 PyInstaller one-folder bundle with an
+automatic CUDA/FP16 Whisper path and CPU/int8 fallback. One-folder packaging
+keeps native dependency files visible and diagnosable; it is not an installer.
 
 The bundle contains the Python runtime, backend application code, FastAPI,
 Uvicorn, Faster-Whisper/CTranslate2 dependencies, and `system_prompt.txt`.
@@ -39,9 +39,27 @@ runtime directory. The package does not guess or selectively copy internal
 Ollama files. The download is cached under `dist\ollama-runtime\v0.34.0` and
 is not source-controlled.
 
+The complete archive includes the CUDA 12.8 runtime under
+`resources\ollama\lib\ollama\cuda_v12\`. When the packaged backend is
+launched, Electron validates `cublas64_12.dll`, `cublasLt64_12.dll`, and
+`cudart64_12.dll` in that exact directory and prepends only that directory to
+the backend child process `PATH`. It does not change the global Windows
+`PATH`, and development launches do not receive the packaged path.
+
+The frozen CTranslate2 4.8.1 backend already includes `cudnn64_9.dll` (cuDNN
+9.10.2). Its CUDA 12 BLAS dependency is satisfied by the pinned Ollama CUDA
+runtime; the runtime remains optional because Faster-Whisper falls back to
+CPU/int8 when CUDA cannot initialize. The complete Ollama archive, including
+its third-party notices such as `lib\ollama\CUDNN_LICENSE.txt`, must remain
+intact. CUDA Runtime/cuBLAS redistribution is governed by the CUDA Toolkit
+EULA, and cuDNN runtime redistribution is governed by the cuDNN Software
+License Agreement; review the applicable NVIDIA terms for each release before
+updating the pinned runtime.
+
 The runtime is started with `ollama serve` on loopback only. It is an
-application-owned process when Electron starts it, and it is stopped on normal
-application shutdown. A user-owned Ollama endpoint is never stopped. If a
+application-owned process when Electron starts it, and Windows shutdown targets
+that recorded PID and its live process tree so Ollama inference children do not
+survive the app. A user-owned Ollama endpoint is never stopped. If a
 user-owned endpoint is running but does not contain the configured model, the
 application does not pull into that endpoint; it prefers the bundled runtime
 and its separate application model directory.
@@ -107,10 +125,12 @@ Invoke-RestMethod http://127.0.0.1:8765/api/status
 ```
 
 The first full startup can download the configured Whisper model into `HF_HOME`.
-The packaged backend binds only to `127.0.0.1`. Windows GPU/CUDA Whisper
-execution is intentionally out of scope; the current packaged Whisper path is
-CPU/int8. CTranslate2's Windows wheel may require the Microsoft Visual C++
-runtime on machines that do not already have it.
+The packaged backend binds only to `127.0.0.1`. `WHISPER_DEVICE=auto` prefers
+CUDA/float16 and safely falls back to CPU/int8; `WHISPER_DEVICE=cpu` always
+uses CPU/int8. NVIDIA GPU acceleration requires a compatible NVIDIA driver,
+but does not require an end user to install the CUDA Toolkit. CTranslate2's
+Windows wheel may require the Microsoft Visual C++ runtime on machines that do
+not already have it.
 
 ## Package with Electron
 

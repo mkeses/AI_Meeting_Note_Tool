@@ -9,10 +9,27 @@ import {
   OLLAMA_ARCHIVE_URL,
   OLLAMA_VERSION,
   resolveBundledOllamaPaths,
+  resolveSharedWhisperCudaRuntimePaths,
   resolveOllamaDownloadDirectory,
   stageOllamaRuntime,
+  validateSharedWhisperCudaRuntime,
   validateOllamaRuntime,
 } from './ollama-runtime.mjs';
+
+const SHARED_CUDA_DLL_NAMES = [
+  'cublas64_12.dll',
+  'cublasLt64_12.dll',
+  'cudart64_12.dll',
+];
+
+function createSharedCudaRuntimeFixture(sourceDirectory) {
+  const cudaDirectory = path.join(sourceDirectory, 'lib', 'ollama', 'cuda_v12');
+  fs.mkdirSync(cudaDirectory, { recursive: true });
+
+  for (const fileName of SHARED_CUDA_DLL_NAMES) {
+    fs.writeFileSync(path.join(cudaDirectory, fileName), fileName);
+  }
+}
 
 function withTemporaryDirectory(callback) {
   const temporaryDirectory = fs.mkdtempSync(
@@ -53,15 +70,24 @@ test('resolves the packaged Ollama resource and cache locations', () => {
     }),
     'C:\\workspace\\meeting-tool\\dist\\ollama-runtime\\v0.34.0'
   );
+  assert.deepEqual(
+    resolveSharedWhisperCudaRuntimePaths({
+      runtimeDirectory:
+        'C:\\Program Files\\AI Meeting Note Tool\\resources\\ollama',
+      pathApi: path.win32,
+    }).dllPaths,
+    SHARED_CUDA_DLL_NAMES.map(
+      (fileName) =>
+        `C:\\Program Files\\AI Meeting Note Tool\\resources\\ollama\\lib\\ollama\\cuda_v12\\${fileName}`
+    )
+  );
 });
 
 test('validates and stages the complete Ollama runtime directory', () => {
   withTemporaryDirectory((temporaryDirectory) => {
     const sourceDirectory = path.join(temporaryDirectory, 'source');
     const resourcesDirectory = path.join(temporaryDirectory, 'resources');
-    fs.mkdirSync(path.join(sourceDirectory, 'lib', 'ollama'), {
-      recursive: true,
-    });
+    createSharedCudaRuntimeFixture(sourceDirectory);
     fs.writeFileSync(path.join(sourceDirectory, 'ollama.exe'), 'ollama');
     fs.writeFileSync(
       path.join(sourceDirectory, 'lib', 'ollama', 'runtime.dll'),
@@ -81,6 +107,20 @@ test('validates and stages the complete Ollama runtime directory', () => {
       ),
       true
     );
+    assert.equal(
+      staged.destinationCudaRuntimeDirectory,
+      path.join(staged.destinationDirectory, 'lib', 'ollama', 'cuda_v12')
+    );
+    assert.deepEqual(
+      staged.destinationCudaRuntimeDllPaths,
+      SHARED_CUDA_DLL_NAMES.map((fileName) =>
+        path.join(staged.destinationCudaRuntimeDirectory, fileName)
+      )
+    );
+    assert.equal(
+      fs.existsSync(path.join(resourcesDirectory, 'whisper-cuda')),
+      false
+    );
   });
 });
 
@@ -89,6 +129,20 @@ test('rejects an incomplete Ollama runtime', () => {
     assert.throws(
       () => validateOllamaRuntime({ sourceDirectory: temporaryDirectory }),
       /ollama\.exe is missing/
+    );
+  });
+});
+
+test('rejects an Ollama runtime without the shared Whisper CUDA libraries', () => {
+  withTemporaryDirectory((temporaryDirectory) => {
+    fs.writeFileSync(path.join(temporaryDirectory, 'ollama.exe'), 'ollama');
+
+    assert.throws(
+      () =>
+        validateSharedWhisperCudaRuntime({
+          sourceDirectory: temporaryDirectory,
+        }),
+      /cublas64_12\.dll is missing/
     );
   });
 });

@@ -209,6 +209,7 @@ async function startDesktopApplication() {
       desktopRuntime,
       ...backendLaunchTarget,
       llmBaseUrl: ollamaStatus?.baseUrl ?? desktopRuntime.config.llm.baseUrl,
+      cudaRuntimeDirectory: resources.whisperCudaRuntimeDirectory,
       rendererOrigin: getRendererOrigin(),
     });
 

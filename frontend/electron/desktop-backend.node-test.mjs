@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
@@ -39,6 +41,22 @@ function createChild() {
     return true;
   };
   return child;
+}
+
+function createSharedCudaRuntimeDirectory() {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'ai-meeting-note-cuda-runtime-')
+  );
+
+  for (const fileName of [
+    'cublas64_12.dll',
+    'cublasLt64_12.dll',
+    'cudart64_12.dll',
+  ]) {
+    fs.writeFileSync(path.join(directory, fileName), fileName);
+  }
+
+  return directory;
 }
 
 test('selects a port from a 127.0.0.1-only listener', async () => {
@@ -152,6 +170,68 @@ test('builds the packaged backend executable launch command from desktop runtime
   assert.equal(spec.options.env.ELECTRON_RENDERER_ORIGIN, 'meeting://renderer');
   assert.equal(spec.options.env.PYTHONUNBUFFERED, '1');
   assert.equal(spec.options.env.LLM_API_KEY, 'existing-secret');
+});
+
+test('adds only the validated packaged CUDA runtime to the backend child PATH', () => {
+  const cudaRuntimeDirectory = createSharedCudaRuntimeDirectory();
+  const inheritedEnvironment = { PATH: 'C:\\Windows\\System32' };
+  const processPathBefore = process.env.PATH;
+
+  try {
+    const spec = buildBackendLaunchSpec({
+      desktopRuntime: createDesktopRuntime(),
+      backendWorkingDirectory: 'C:\\resources\\backend',
+      backendExecutablePath:
+        'C:\\resources\\backend\\ai-meeting-note-backend.exe',
+      cudaRuntimeDirectory,
+      port: 45678,
+      rendererOrigin: 'meeting://renderer',
+      inheritedEnvironment,
+    });
+
+    assert.equal(
+      spec.options.env.PATH,
+      `${cudaRuntimeDirectory}${path.delimiter}C:\\Windows\\System32`
+    );
+    assert.deepEqual(inheritedEnvironment, { PATH: 'C:\\Windows\\System32' });
+    assert.equal(process.env.PATH, processPathBefore);
+  } finally {
+    fs.rmSync(cudaRuntimeDirectory, { recursive: true, force: true });
+  }
+});
+
+test('does not add a packaged CUDA runtime to development or an incomplete runtime', () => {
+  const cudaRuntimeDirectory = createSharedCudaRuntimeDirectory();
+
+  try {
+    const developmentSpec = buildBackendLaunchSpec({
+      desktopRuntime: createDesktopRuntime(),
+      backendWorkingDirectory: '/workspace/backend',
+      cudaRuntimeDirectory,
+      port: 45678,
+      rendererOrigin: 'http://localhost:3000',
+      inheritedEnvironment: { PATH: '/development/path' },
+    });
+    const cpuFallbackSpec = buildBackendLaunchSpec({
+      desktopRuntime: createDesktopRuntime(),
+      backendWorkingDirectory: 'C:\\resources\\backend',
+      backendExecutablePath:
+        'C:\\resources\\backend\\ai-meeting-note-backend.exe',
+      cudaRuntimeDirectory: path.join(cudaRuntimeDirectory, 'missing'),
+      port: 45678,
+      rendererOrigin: 'meeting://renderer',
+      inheritedEnvironment: {
+        PATH: 'C:\\Windows\\System32',
+        WHISPER_DEVICE: 'cpu',
+      },
+    });
+
+    assert.equal(developmentSpec.options.env.PATH, '/development/path');
+    assert.equal(cpuFallbackSpec.options.env.PATH, 'C:\\Windows\\System32');
+    assert.equal(cpuFallbackSpec.options.env.WHISPER_DEVICE, 'cpu');
+  } finally {
+    fs.rmSync(cudaRuntimeDirectory, { recursive: true, force: true });
+  }
 });
 
 test('supplies the non-secret Ollama API key for the built-in desktop configuration', () => {

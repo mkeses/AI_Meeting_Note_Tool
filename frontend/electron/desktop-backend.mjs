@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { DEFAULT_DESKTOP_RUNTIME_CONFIG } from './desktop-runtime.mjs';
+import {
+  DEFAULT_DESKTOP_RUNTIME_CONFIG,
+  SHARED_WHISPER_CUDA_RUNTIME_DLL_NAMES,
+} from './desktop-runtime.mjs';
 
 export const LOOPBACK_HOST = '127.0.0.1';
 export const DEFAULT_STARTUP_TIMEOUT_MS = 300_000;
@@ -52,6 +55,60 @@ function resolveDesktopLlmApiKey({
   }
 
   return undefined;
+}
+
+function hasSharedWhisperCudaRuntime({ cudaRuntimeDirectory, fsApi, pathApi }) {
+  if (
+    typeof cudaRuntimeDirectory !== 'string' ||
+    !pathApi.isAbsolute(cudaRuntimeDirectory) ||
+    !fsApi.existsSync(cudaRuntimeDirectory)
+  ) {
+    return false;
+  }
+
+  try {
+    if (!fsApi.statSync(cudaRuntimeDirectory).isDirectory()) {
+      return false;
+    }
+
+    return SHARED_WHISPER_CUDA_RUNTIME_DLL_NAMES.every((fileName) => {
+      const filePath = pathApi.join(cudaRuntimeDirectory, fileName);
+      return fsApi.existsSync(filePath) && fsApi.statSync(filePath).isFile();
+    });
+  } catch {
+    return false;
+  }
+}
+
+function prependCudaRuntimePath({
+  environment,
+  cudaRuntimeDirectory,
+  isPackagedBackend,
+  fsApi,
+  pathApi,
+}) {
+  if (
+    !isPackagedBackend ||
+    !hasSharedWhisperCudaRuntime({
+      cudaRuntimeDirectory,
+      fsApi,
+      pathApi,
+    })
+  ) {
+    return environment;
+  }
+
+  const existingPathKey =
+    Object.keys(environment).find((key) => key.toLowerCase() === 'path') ??
+    'PATH';
+  const existingPath = environment[existingPathKey];
+
+  return {
+    ...environment,
+    [existingPathKey]: existingPath
+      ? `${cudaRuntimeDirectory}${pathApi.delimiter}${existingPath}`
+      : cudaRuntimeDirectory,
+  };
 }
 
 function formatLifecycleEvent(event, details) {
@@ -131,9 +188,12 @@ export function buildBackendLaunchSpec({
   backendExecutablePath,
   llmBaseUrl,
   inheritedEnvironment = process.env,
+  cudaRuntimeDirectory,
+  fsApi = fs,
+  pathApi = path,
 }) {
   const isPackagedBackend = Boolean(backendExecutablePath);
-  const environment = {
+  let environment = {
     ...inheritedEnvironment,
     DATABASE_PATH: desktopRuntime.paths.databasePath,
     HF_HOME: desktopRuntime.paths.modelCacheDirectory,
@@ -145,6 +205,14 @@ export function buildBackendLaunchSpec({
     ELECTRON_RENDERER_ORIGIN: rendererOrigin,
     PYTHONUNBUFFERED: '1',
   };
+
+  environment = prependCudaRuntimePath({
+    environment,
+    cudaRuntimeDirectory,
+    isPackagedBackend,
+    fsApi,
+    pathApi,
+  });
   const llmApiKey = resolveDesktopLlmApiKey({
     desktopRuntime,
     inheritedEnvironment,
@@ -287,6 +355,7 @@ export class BackendLifecycleManager {
     backendCommand,
     backendExecutablePath,
     llmBaseUrl,
+    cudaRuntimeDirectory,
     startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS,
   }) {
     if (this.child) {
@@ -303,6 +372,7 @@ export class BackendLifecycleManager {
       backendCommand,
       backendExecutablePath,
       llmBaseUrl,
+      cudaRuntimeDirectory,
     });
 
     this.log('backend-starting', { port });

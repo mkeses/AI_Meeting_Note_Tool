@@ -17,6 +17,7 @@ def test_settings_reads_deployment_values_without_making_them_global(
     settings = Settings.from_environment()
 
     assert settings.whisper_model == "base.en"
+    assert settings.whisper_device == "auto"
     assert settings.llm_base_url == "https://llm.example.test/v1"
     assert settings.database_path == "/data/meetings.db"
     assert settings.electron_desktop_mode is True
@@ -66,6 +67,30 @@ def test_settings_reports_all_missing_model_configuration(
         monkeypatch.delenv(name, raising=False)
 
     with pytest.raises(RuntimeError, match="WHISPER_MODEL, LLM_BASE_URL"):
+        Settings.from_environment()
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_settings_accepts_explicit_whisper_device(
+    monkeypatch: pytest.MonkeyPatch, device: str
+) -> None:
+    monkeypatch.setenv("WHISPER_MODEL", "base.en")
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("LLM_MODEL", "gemma3:4b")
+    monkeypatch.setenv("WHISPER_DEVICE", device)
+
+    assert Settings.from_environment().whisper_device == device
+
+
+def test_settings_rejects_unknown_whisper_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHISPER_MODEL", "base.en")
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("LLM_MODEL", "gemma3:4b")
+    monkeypatch.setenv("WHISPER_DEVICE", "gpu")
+
+    with pytest.raises(RuntimeError, match="WHISPER_DEVICE"):
         Settings.from_environment()
 
 

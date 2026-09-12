@@ -8,6 +8,7 @@ import {
   DESKTOP_APPLICATION_NAME,
   PACKAGED_BACKEND_DIRECTORY_NAME,
   PACKAGED_BACKEND_EXECUTABLE_NAME,
+  PACKAGED_OLLAMA_CUDA_V12_DIRECTORY_SEGMENTS,
   PACKAGED_OLLAMA_DIRECTORY_NAME,
   PACKAGED_OLLAMA_EXECUTABLE_NAME,
   initializeDesktopRuntime,
@@ -83,6 +84,10 @@ test('resolves the packaged backend executable from Electron resources', () => {
   assert.equal(
     resources.ollamaExecutablePath,
     `C:\\Program Files\\AI Meeting Note Tool\\resources\\${PACKAGED_OLLAMA_DIRECTORY_NAME}\\${PACKAGED_OLLAMA_EXECUTABLE_NAME}`
+  );
+  assert.equal(
+    resources.whisperCudaRuntimeDirectory,
+    `C:\\Program Files\\AI Meeting Note Tool\\resources\\${PACKAGED_OLLAMA_DIRECTORY_NAME}\\${PACKAGED_OLLAMA_CUDA_V12_DIRECTORY_SEGMENTS.join('\\')}`
   );
 });
 

@@ -164,6 +164,7 @@ async def lifespan(app: FastAPI):
 
         service = TranscriptionService(
             whisper_model=settings.whisper_model,
+            whisper_device=settings.whisper_device,
             llm_base_url=settings.llm_base_url,
             llm_api_key=settings.llm_api_key,
             llm_model=settings.llm_model,
@@ -269,6 +270,9 @@ async def get_status():
         whisper_model_status = getattr(service, "whisper_model_status", None)
         if whisper_model_status is not None:
             whisper_status = whisper_model_status.as_dict()
+            whisper_runtime_status = getattr(service, "whisper_runtime_status", None)
+            if whisper_runtime_status is not None:
+                whisper_status.update(whisper_runtime_status())
         provider = getattr(service, "llm_provider", None)
         llm_status = getattr(provider, "model_status", None)
         if llm_status is not None:
@@ -717,7 +721,7 @@ async def transcribe_chunks(audio_chunks: list[bytes]) -> str:
         )
         audio_16k = resample_poly(audio_48k, 1, 3).astype(np.float32)
 
-        segments, info = service.whisper.transcribe(
+        segments, info = service.transcribe_segments(
             audio_16k,
             language="en",
             beam_size=1,
@@ -767,7 +771,7 @@ async def transcribe_chunk_words(
 
         whisper_start = time.monotonic()
 
-        segments, _info = service.whisper.transcribe(
+        segments, _info = service.transcribe_segments(
             audio_16k,
             language="en",
             beam_size=1,
@@ -777,8 +781,6 @@ async def transcribe_chunk_words(
             vad_parameters=LIVE_VAD_PARAMETERS,
             word_timestamps=True,
         )
-
-        segments = list(segments)
 
         whisper_elapsed = time.monotonic() - whisper_start
 

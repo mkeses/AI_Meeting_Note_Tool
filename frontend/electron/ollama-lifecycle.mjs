@@ -242,7 +242,12 @@ export function resolveKnownOllamaExecutablePaths({
   const candidates = [
     environment.OLLAMA_EXECUTABLE,
     environment.LOCALAPPDATA &&
-      pathApi.join(environment.LOCALAPPDATA, 'Programs', 'Ollama', 'ollama.exe'),
+      pathApi.join(
+        environment.LOCALAPPDATA,
+        'Programs',
+        'Ollama',
+        'ollama.exe'
+      ),
     environment.ProgramFiles &&
       pathApi.join(environment.ProgramFiles, 'Ollama', 'ollama.exe'),
     environment['ProgramFiles(x86)'] &&
@@ -265,11 +270,58 @@ function findAvailableLoopbackPort() {
     server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => {
       const address = server.address();
       if (!address || typeof address === 'string') {
-        server.close(() => reject(new Error('Could not determine Ollama port.')));
+        server.close(() =>
+          reject(new Error('Could not determine Ollama port.'))
+        );
         return;
       }
       server.close((error) => (error ? reject(error) : resolve(address.port)));
     });
+  });
+}
+
+export function terminateWindowsProcessTree({
+  pid,
+  spawnProcess = spawn,
+  timeoutMs = OLLAMA_SHUTDOWN_TIMEOUT_MS,
+} = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    let taskkill;
+    try {
+      taskkill = spawnProcess(
+        'taskkill.exe',
+        ['/PID', String(pid), '/T', '/F'],
+        {
+          windowsHide: true,
+          stdio: 'ignore',
+        }
+      );
+    } catch {
+      resolve(false);
+      return;
+    }
+
+    if (!taskkill || typeof taskkill.once !== 'function') {
+      resolve(false);
+      return;
+    }
+
+    let settled = false;
+    let timer;
+    const finish = (result) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      }
+    };
+    timer = setTimeout(() => finish(false), timeoutMs);
+    taskkill.once('error', () => finish(false));
+    taskkill.once('exit', (code) => finish(code === 0));
   });
 }
 
@@ -278,6 +330,7 @@ async function terminateOwnedProcess({
   waitForExit,
   killProcessTree,
   gracefulTimeoutMs,
+  platform,
   log,
 }) {
   if (!child || child.exitCode !== null) {
@@ -285,6 +338,14 @@ async function terminateOwnedProcess({
   }
 
   log('ollama-shutdown-requested');
+  if (platform === 'win32') {
+    log('ollama-process-tree-shutdown-requested', { pid: child.pid });
+    const treeTerminated = await killProcessTree(child);
+    const stopped = await waitForExit(gracefulTimeoutMs);
+    log('ollama-shutdown-complete', { forced: true, stopped, treeTerminated });
+    return { stopped, forced: true };
+  }
+
   child.kill('SIGTERM');
   if (await waitForExit(gracefulTimeoutMs)) {
     log('ollama-shutdown-complete', { forced: false });
@@ -307,15 +368,13 @@ export class OllamaLifecycleManager {
     now = Date.now,
     sleep = (milliseconds) =>
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    platform = process.platform,
     killProcessTree = async (child) => {
-      if (process.platform === 'win32' && child.pid) {
-        spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
-          windowsHide: true,
-          stdio: 'ignore',
-        });
-      } else {
-        child.kill('SIGKILL');
+      if (platform === 'win32') {
+        return terminateWindowsProcessTree({ pid: child.pid });
       }
+      child.kill('SIGKILL');
+      return true;
     },
     log = () => {},
   } = {}) {
@@ -325,6 +384,7 @@ export class OllamaLifecycleManager {
     this.fsApi = fsApi;
     this.now = now;
     this.sleep = sleep;
+    this.platform = platform;
     this.killProcessTree = killProcessTree;
     this.log = log;
     this.child = null;
@@ -431,7 +491,9 @@ export class OllamaLifecycleManager {
     this.state = 'starting';
     this.error = null;
     this.exitDeferred = createDeferred();
-    child.once('error', (error) => this.handleExit(child, getErrorMessage(error)));
+    child.once('error', (error) =>
+      this.handleExit(child, getErrorMessage(error))
+    );
     child.once('exit', (code, signal) =>
       this.handleExit(child, `exit ${code ?? 'unknown'} ${signal ?? ''}`)
     );
@@ -535,6 +597,7 @@ export class OllamaLifecycleManager {
       waitForExit: (timeoutMs) => this.waitForExit(timeoutMs),
       killProcessTree: this.killProcessTree,
       gracefulTimeoutMs: OLLAMA_SHUTDOWN_TIMEOUT_MS,
+      platform: this.platform,
       log: this.log,
     }).finally(() => {
       this.stopPromise = null;

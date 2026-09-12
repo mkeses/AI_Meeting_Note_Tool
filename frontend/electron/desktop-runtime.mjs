@@ -7,6 +7,16 @@ export const PACKAGED_BACKEND_DIRECTORY_NAME = 'backend';
 export const PACKAGED_BACKEND_EXECUTABLE_NAME = 'ai-meeting-note-backend.exe';
 export const PACKAGED_OLLAMA_DIRECTORY_NAME = 'ollama';
 export const PACKAGED_OLLAMA_EXECUTABLE_NAME = 'ollama.exe';
+export const PACKAGED_OLLAMA_CUDA_V12_DIRECTORY_SEGMENTS = Object.freeze([
+  'lib',
+  'ollama',
+  'cuda_v12',
+]);
+export const SHARED_WHISPER_CUDA_RUNTIME_DLL_NAMES = Object.freeze([
+  'cublas64_12.dll',
+  'cublasLt64_12.dll',
+  'cudart64_12.dll',
+]);
 
 export const DEFAULT_DESKTOP_RUNTIME_CONFIG = Object.freeze({
   configVersion: DESKTOP_CONFIG_VERSION,
@@ -86,6 +96,10 @@ export function resolveDesktopResourcePaths({
     resourcesPath,
     PACKAGED_OLLAMA_DIRECTORY_NAME
   );
+  const whisperCudaRuntimeDirectory = pathApi.join(
+    ollamaDirectory,
+    ...PACKAGED_OLLAMA_CUDA_V12_DIRECTORY_SEGMENTS
+  );
 
   return {
     applicationResourcesDirectory: resourcesPath,
@@ -100,6 +114,7 @@ export function resolveDesktopResourcePaths({
       ollamaDirectory,
       PACKAGED_OLLAMA_EXECUTABLE_NAME
     ),
+    whisperCudaRuntimeDirectory,
   };
 }
 

@@ -75,6 +75,7 @@ def validate_postgres_database_url(
 class Settings:
     app_environment: str
     whisper_model: str
+    whisper_device: str
     llm_base_url: str
     llm_api_key: str | None
     llm_model: str
@@ -107,6 +108,10 @@ class Settings:
             raise RuntimeError(
                 "Missing required environment variables: " + ", ".join(missing)
             )
+
+        whisper_device = os.getenv("WHISPER_DEVICE", "auto").lower()
+        if whisper_device not in {"auto", "cuda", "cpu"}:
+            raise RuntimeError("WHISPER_DEVICE must be one of: auto, cuda, cpu")
 
         storage_backend = os.getenv("MEETING_STORAGE_BACKEND", "sqlite").lower()
         postgres_database_url = os.getenv("POSTGRES_DATABASE_URL")
@@ -171,6 +176,7 @@ class Settings:
         return cls(
             app_environment=app_environment,
             whisper_model=values["WHISPER_MODEL"],
+            whisper_device=whisper_device,
             llm_base_url=values["LLM_BASE_URL"],
             llm_api_key=llm_api_key,
             llm_model=values["LLM_MODEL"],
