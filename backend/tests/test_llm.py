@@ -4,12 +4,14 @@ import httpx
 import pytest
 from openai import APIStatusError, AuthenticationError, NotFoundError
 
+import llm
 from llm import (
     MEETING_NOTES_MAX_TOKENS,
     SYSTEM_PROMPT,
     MeetingIntelligenceError,
     OpenAICompatibleMeetingIntelligence,
 )
+from model_provisioning import ModelProvisioningState
 from transcription import TranscriptionService
 
 
@@ -32,6 +34,15 @@ class FakeClient:
         self.chat = SimpleNamespace(completions=self.completions)
 
 
+class FakeModelListingClient:
+    def __init__(self, model_ids: list[str]) -> None:
+        self.models = SimpleNamespace(
+            list=lambda: SimpleNamespace(
+                data=[SimpleNamespace(id=model_id) for model_id in model_ids]
+            )
+        )
+
+
 def completion(content: object) -> object:
     return SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
@@ -46,6 +57,56 @@ def provider_with_client(client: FakeClient) -> OpenAICompatibleMeetingIntellige
         timeout_seconds=12.5,
         client=client,
     )
+
+
+def test_provider_marks_cleanup_model_unavailable_without_blocking_construction(
+    monkeypatch,
+) -> None:
+    class UnavailableOpenAI:
+        def __init__(self, **_kwargs: object) -> None:
+            self.models = SimpleNamespace(
+                list=lambda: (_ for _ in ()).throw(ConnectionError("offline"))
+            )
+
+    monkeypatch.setattr(llm, "OpenAI", UnavailableOpenAI)
+
+    provider = OpenAICompatibleMeetingIntelligence(
+        base_url="http://127.0.0.1:11434/v1",
+        api_key=None,
+        model="gemma3:4b",
+    )
+
+    assert provider.model_status.state == ModelProvisioningState.UNAVAILABLE
+
+
+def test_provider_marks_configured_model_missing_without_blocking_construction(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(llm, "OpenAI", lambda **_kwargs: FakeModelListingClient([]))
+
+    provider = OpenAICompatibleMeetingIntelligence(
+        base_url="http://127.0.0.1:11434/v1",
+        api_key=None,
+        model="gemma3:4b",
+    )
+
+    assert provider.model_status.state == ModelProvisioningState.MISSING
+
+
+def test_provider_marks_configured_model_ready_when_listed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        llm,
+        "OpenAI",
+        lambda **_kwargs: FakeModelListingClient(["gemma3:4b"]),
+    )
+
+    provider = OpenAICompatibleMeetingIntelligence(
+        base_url="http://127.0.0.1:11434/v1",
+        api_key=None,
+        model="gemma3:4b",
+    )
+
+    assert provider.model_status.state == ModelProvisioningState.READY
 
 
 def test_openai_compatible_provider_preserves_the_existing_request_contract() -> None:

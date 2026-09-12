@@ -168,6 +168,7 @@ async def lifespan(app: FastAPI):
             llm_api_key=settings.llm_api_key,
             llm_model=settings.llm_model,
             llm_timeout_seconds=settings.llm_timeout_seconds,
+            ollama_model_directory=settings.ollama_model_directory,
         )
         meeting_repository = create_meeting_store(settings)
         meeting_repository.initialize()
@@ -262,10 +263,22 @@ async def get_ready():
 
 @app.get("/api/status")
 async def get_status():
+    llm_status = None
+    whisper_status = None
+    if service is not None:
+        whisper_model_status = getattr(service, "whisper_model_status", None)
+        if whisper_model_status is not None:
+            whisper_status = whisper_model_status.as_dict()
+        provider = getattr(service, "llm_provider", None)
+        llm_status = getattr(provider, "model_status", None)
+        if llm_status is not None:
+            llm_status = llm_status.as_dict()
     return {
         "status": application_status(),
         "whisper_model": os.getenv("WHISPER_MODEL"),
         "llm_model": os.getenv("LLM_MODEL"),
+        "whisper": whisper_status,
+        "llm": llm_status,
     }
 
 

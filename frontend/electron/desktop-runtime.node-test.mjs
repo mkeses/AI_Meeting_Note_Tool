@@ -8,6 +8,8 @@ import {
   DESKTOP_APPLICATION_NAME,
   PACKAGED_BACKEND_DIRECTORY_NAME,
   PACKAGED_BACKEND_EXECUTABLE_NAME,
+  PACKAGED_OLLAMA_DIRECTORY_NAME,
+  PACKAGED_OLLAMA_EXECUTABLE_NAME,
   initializeDesktopRuntime,
   loadDesktopRuntimeConfig,
   resolveDesktopDataRoot,
@@ -38,6 +40,10 @@ test('uses LOCALAPPDATA for the Windows desktop data root', () => {
   assert.equal(
     paths.modelCacheDirectory,
     `C:\\Users\\Ada\\AppData\\Local\\${DESKTOP_APPLICATION_NAME}\\models\\huggingface`
+  );
+  assert.equal(
+    paths.ollamaModelDirectory,
+    `C:\\Users\\Ada\\AppData\\Local\\${DESKTOP_APPLICATION_NAME}\\models\\ollama`
   );
 });
 
@@ -70,6 +76,14 @@ test('resolves the packaged backend executable from Electron resources', () => {
     resources.backendExecutablePath,
     `C:\\Program Files\\AI Meeting Note Tool\\resources\\${PACKAGED_BACKEND_DIRECTORY_NAME}\\${PACKAGED_BACKEND_EXECUTABLE_NAME}`
   );
+  assert.equal(
+    resources.ollamaDirectory,
+    `C:\\Program Files\\AI Meeting Note Tool\\resources\\${PACKAGED_OLLAMA_DIRECTORY_NAME}`
+  );
+  assert.equal(
+    resources.ollamaExecutablePath,
+    `C:\\Program Files\\AI Meeting Note Tool\\resources\\${PACKAGED_OLLAMA_DIRECTORY_NAME}\\${PACKAGED_OLLAMA_EXECUTABLE_NAME}`
+  );
 });
 
 test('creates desktop-owned directories and a non-secret default config only', () => {
@@ -95,6 +109,7 @@ test('creates desktop-owned directories and a non-secret default config only', (
     assert.equal(fs.existsSync(runtime.paths.configurationFilePath), true);
     assert.equal(fs.existsSync(runtime.paths.dataDirectory), true);
     assert.equal(fs.existsSync(runtime.paths.modelCacheDirectory), true);
+    assert.equal(fs.existsSync(runtime.paths.ollamaModelDirectory), true);
     assert.equal(fs.existsSync(runtime.paths.logsDirectory), true);
     assert.equal(fs.existsSync(runtime.paths.databasePath), false);
   } finally {

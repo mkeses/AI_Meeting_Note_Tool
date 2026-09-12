@@ -79,6 +79,7 @@ class Settings:
     llm_api_key: str | None
     llm_model: str
     llm_timeout_seconds: float
+    ollama_model_directory: str | None
     database_path: str
     storage_backend: str
     postgres_database_url: str | None
@@ -174,6 +175,7 @@ class Settings:
             llm_api_key=llm_api_key,
             llm_model=values["LLM_MODEL"],
             llm_timeout_seconds=llm_timeout_seconds,
+            ollama_model_directory=os.getenv("OLLAMA_MODELS"),
             database_path=os.getenv("DATABASE_PATH", str(Path("data") / "meetings.db")),
             storage_backend=storage_backend,
             postgres_database_url=postgres_database_url,

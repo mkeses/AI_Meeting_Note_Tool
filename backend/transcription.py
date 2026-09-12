@@ -4,6 +4,8 @@ Uses OpenAI API format, compatible with Ollama, OpenAI, LM Studio, and other pro
 Configuration is loaded from .env file.
 """
 
+import os
+
 from faster_whisper import WhisperModel
 
 from llm import (
@@ -12,6 +14,7 @@ from llm import (
     MeetingIntelligenceProvider,
     OpenAICompatibleMeetingIntelligence,
 )
+from model_provisioning import whisper_failed_status, whisper_ready_status
 
 
 class TranscriptionService:
@@ -22,16 +25,30 @@ class TranscriptionService:
         llm_api_key: str | None,
         llm_model: str,
         llm_timeout_seconds: float = 30.0,
+        ollama_model_directory: str | None = None,
         llm_provider: MeetingIntelligenceProvider | None = None,
     ):
         print(f"Loading Whisper model '{whisper_model}'...")
 
         self.whisper_device = "cpu"
         self.whisper_compute_type = "int8"
-        self.whisper = WhisperModel(
-            whisper_model,
-            device="cpu",
-            compute_type="int8",
+        try:
+            self.whisper = WhisperModel(
+                whisper_model,
+                device="cpu",
+                compute_type="int8",
+            )
+        except Exception as error:
+            self.whisper_model_status = whisper_failed_status(
+                whisper_model,
+                "Whisper model is unavailable",
+                os.getenv("HF_HOME"),
+            )
+            raise RuntimeError(
+                f"Whisper model '{whisper_model}' is unavailable"
+            ) from error
+        self.whisper_model_status = whisper_ready_status(
+            whisper_model, os.getenv("HF_HOME")
         )
         print("Faster-Whisper loaded on CPU (int8)")
 
@@ -46,6 +63,7 @@ class TranscriptionService:
             api_key=llm_api_key,
             model=llm_model,
             timeout_seconds=llm_timeout_seconds,
+            model_storage_location=ollama_model_directory,
         )
 
     def transcribe(self, audio_file):

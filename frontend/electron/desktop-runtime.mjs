@@ -5,6 +5,8 @@ export const DESKTOP_APPLICATION_NAME = 'AI Meeting Note Tool';
 export const DESKTOP_CONFIG_VERSION = 1;
 export const PACKAGED_BACKEND_DIRECTORY_NAME = 'backend';
 export const PACKAGED_BACKEND_EXECUTABLE_NAME = 'ai-meeting-note-backend.exe';
+export const PACKAGED_OLLAMA_DIRECTORY_NAME = 'ollama';
+export const PACKAGED_OLLAMA_EXECUTABLE_NAME = 'ollama.exe';
 
 export const DEFAULT_DESKTOP_RUNTIME_CONFIG = Object.freeze({
   configVersion: DESKTOP_CONFIG_VERSION,
@@ -63,6 +65,7 @@ export function resolveDesktopRuntimePaths({ dataRoot, pathApi = path }) {
     dataDirectory: pathApi.join(dataRoot, 'data'),
     databasePath: pathApi.join(dataRoot, 'data', 'meetings.db'),
     modelCacheDirectory: pathApi.join(dataRoot, 'models', 'huggingface'),
+    ollamaModelDirectory: pathApi.join(dataRoot, 'models', 'ollama'),
     logsDirectory: pathApi.join(dataRoot, 'logs'),
     runtimeStateDirectory: pathApi.join(dataRoot, 'runtime'),
     electronUserDataDirectory: pathApi.join(dataRoot, 'electron'),
@@ -79,6 +82,10 @@ export function resolveDesktopResourcePaths({
     resourcesPath,
     PACKAGED_BACKEND_DIRECTORY_NAME
   );
+  const ollamaDirectory = pathApi.join(
+    resourcesPath,
+    PACKAGED_OLLAMA_DIRECTORY_NAME
+  );
 
   return {
     applicationResourcesDirectory: resourcesPath,
@@ -88,6 +95,11 @@ export function resolveDesktopResourcePaths({
       backendDirectory,
       PACKAGED_BACKEND_EXECUTABLE_NAME
     ),
+    ollamaDirectory,
+    ollamaExecutablePath: pathApi.join(
+      ollamaDirectory,
+      PACKAGED_OLLAMA_EXECUTABLE_NAME
+    ),
   };
 }
 
@@ -96,6 +108,7 @@ export function ensureDesktopRuntimeDirectories(paths, fsApi = fs) {
     paths.configurationDirectory,
     paths.dataDirectory,
     paths.modelCacheDirectory,
+    paths.ollamaModelDirectory,
     paths.logsDirectory,
     paths.runtimeStateDirectory,
     paths.electronUserDataDirectory,

@@ -22,9 +22,14 @@ import {
   resolveRendererAssetPath,
 } from './desktop-protocol.mjs';
 import {
+  DEFAULT_DESKTOP_RUNTIME_CONFIG,
   initializeDesktopRuntime,
   resolveDesktopResourcePaths,
 } from './desktop-runtime.mjs';
+import {
+  OllamaLifecycleManager,
+  resolveKnownOllamaExecutablePaths,
+} from './ollama-lifecycle.mjs';
 import { configureDesktopMediaCapture } from './desktop-media.mjs';
 import { handleWindowsSquirrelEvent } from './windows-squirrel.mjs';
 
@@ -70,6 +75,7 @@ const useProductionRenderer =
   app.isPackaged || process.argv.includes('--production');
 let mainWindow = null;
 let backendLifecycle = null;
+let ollamaLifecycle = null;
 let activeBackendOrigin = null;
 let isQuitting = false;
 
@@ -143,6 +149,17 @@ function createBackendLifecycle() {
   });
 }
 
+function createOllamaLifecycle() {
+  const log = createLifecycleLogger({
+    logFilePath: path.join(
+      desktopRuntime.paths.logsDirectory,
+      'ollama-lifecycle.log'
+    ),
+  });
+
+  return new OllamaLifecycleManager({ spawnProcess: spawn, log });
+}
+
 async function startDesktopApplication() {
   const resources = resolveDesktopResourcePaths({
     appPath: app.getAppPath(),
@@ -170,15 +187,37 @@ async function startDesktopApplication() {
     registerRendererProtocol(resources);
   }
 
-  backendLifecycle = createBackendLifecycle();
-  const backend = await backendLifecycle.start({
-    desktopRuntime,
-    ...backendLaunchTarget,
-    rendererOrigin: getRendererOrigin(),
-  });
+  const usesBuiltInOllama =
+    desktopRuntime.config.llm.baseUrl ===
+    DEFAULT_DESKTOP_RUNTIME_CONFIG.llm.baseUrl;
+  let ollamaStatus = null;
 
-  activeBackendOrigin = backend.origin;
-  createWindow(backend.origin, resources);
+  if (usesBuiltInOllama) {
+    ollamaLifecycle = createOllamaLifecycle();
+    ollamaStatus = await ollamaLifecycle.start({
+      configuredBaseUrl: desktopRuntime.config.llm.baseUrl,
+      model: desktopRuntime.config.llm.model,
+      modelDirectory: desktopRuntime.paths.ollamaModelDirectory,
+      bundledExecutablePath: resources.ollamaExecutablePath,
+      externalExecutablePaths: resolveKnownOllamaExecutablePaths(),
+    });
+  }
+
+  backendLifecycle = createBackendLifecycle();
+  try {
+    const backend = await backendLifecycle.start({
+      desktopRuntime,
+      ...backendLaunchTarget,
+      llmBaseUrl: ollamaStatus?.baseUrl ?? desktopRuntime.config.llm.baseUrl,
+      rendererOrigin: getRendererOrigin(),
+    });
+
+    activeBackendOrigin = backend.origin;
+    createWindow(backend.origin, resources);
+  } catch (error) {
+    await ollamaLifecycle?.stop();
+    throw error;
+  }
 }
 
 app.whenReady().then(async () => {
@@ -230,5 +269,8 @@ app.on('before-quit', (event) => {
 
   event.preventDefault();
   isQuitting = true;
-  void backendLifecycle.stop().finally(() => app.exit());
+  void backendLifecycle
+    .stop()
+    .finally(() => ollamaLifecycle?.stop())
+    .finally(() => app.exit());
 });

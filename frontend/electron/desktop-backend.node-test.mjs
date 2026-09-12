@@ -16,6 +16,7 @@ function createDesktopRuntime({ llm = {} } = {}) {
     paths: {
       databasePath: '/runtime/data/meetings.db',
       modelCacheDirectory: '/runtime/models/huggingface',
+      ollamaModelDirectory: '/runtime/models/ollama',
     },
     config: {
       whisperModel: 'base.en',
@@ -96,6 +97,7 @@ test('builds the development uvicorn launch command from desktop runtime configu
   assert.equal(spec.options.cwd, '/workspace/backend');
   assert.equal(spec.options.env.DATABASE_PATH, '/runtime/data/meetings.db');
   assert.equal(spec.options.env.HF_HOME, '/runtime/models/huggingface');
+  assert.equal(spec.options.env.OLLAMA_MODELS, '/runtime/models/ollama');
   assert.equal(spec.options.env.WHISPER_MODEL, 'base.en');
   assert.equal(spec.options.env.LLM_BASE_URL, 'http://127.0.0.1:11434/v1');
   assert.equal(spec.options.env.LLM_MODEL, 'gemma3:4b');
@@ -142,6 +144,7 @@ test('builds the packaged backend executable launch command from desktop runtime
   );
   assert.equal(spec.options.env.DATABASE_PATH, '/runtime/data/meetings.db');
   assert.equal(spec.options.env.HF_HOME, '/runtime/models/huggingface');
+  assert.equal(spec.options.env.OLLAMA_MODELS, '/runtime/models/ollama');
   assert.equal(spec.options.env.WHISPER_MODEL, 'base.en');
   assert.equal(spec.options.env.LLM_BASE_URL, 'http://127.0.0.1:11434/v1');
   assert.equal(spec.options.env.LLM_MODEL, 'gemma3:4b');
@@ -212,6 +215,46 @@ test('does not add an Ollama API key to the development backend command', () => 
   });
 
   assert.equal(spec.options.env.LLM_API_KEY, undefined);
+});
+
+test('passes an application-owned dynamic Ollama endpoint to the backend process', async () => {
+  const child = createChild();
+  child.kill = (signal) => {
+    child.signals.push(signal);
+    child.exitCode = 0;
+    child.emit('exit', 0, null);
+    return true;
+  };
+  const spawnCalls = [];
+  const manager = new BackendLifecycleManager({
+    spawnProcess: (...args) => {
+      spawnCalls.push(args);
+      return child;
+    },
+    selectPort: async () => 45678,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ status: 'ready' }),
+    }),
+  });
+
+  await manager.start({
+    desktopRuntime: createDesktopRuntime(),
+    backendWorkingDirectory: '/workspace/backend',
+    rendererOrigin: 'meeting://renderer',
+    llmBaseUrl: 'http://127.0.0.1:63574/v1',
+  });
+
+  assert.equal(
+    spawnCalls[0][2].env.LLM_BASE_URL,
+    'http://127.0.0.1:63574/v1'
+  );
+  assert.notEqual(
+    spawnCalls[0][2].env.LLM_BASE_URL,
+    'http://127.0.0.1:11434/v1'
+  );
+
+  await manager.stop();
 });
 
 test('retries readiness until the backend reports ready', async () => {

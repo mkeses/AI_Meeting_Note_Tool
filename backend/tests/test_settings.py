@@ -41,6 +41,24 @@ def test_local_ollama_settings_do_not_require_an_api_key(
     assert settings.llm_api_key is None
 
 
+def test_local_ollama_model_directory_is_optional_and_configurable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHISPER_MODEL", "base.en")
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("LLM_MODEL", "gemma3:4b")
+    monkeypatch.setenv(
+        "OLLAMA_MODELS",
+        "C:\\AppData\\AI Meeting Note Tool\\models\\ollama",
+    )
+
+    settings = Settings.from_environment()
+
+    assert settings.ollama_model_directory == (
+        "C:\\AppData\\AI Meeting Note Tool\\models\\ollama"
+    )
+
+
 def test_settings_reports_all_missing_model_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

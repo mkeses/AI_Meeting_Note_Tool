@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 import llm
 import transcription
 
@@ -65,6 +67,21 @@ def test_transcription_service_initializes_faster_whisper_for_cpu_int8(
     assert service.whisper_device == "cpu"
     assert service.whisper_compute_type == "int8"
     assert "private-key" not in capsys.readouterr().out
+
+
+def test_transcription_service_reports_whisper_model_failure(monkeypatch):
+    def fail_to_load(*_args, **_kwargs):
+        raise OSError("model unavailable")
+
+    monkeypatch.setattr(transcription, "WhisperModel", fail_to_load)
+
+    with pytest.raises(RuntimeError, match="Whisper model 'missing.en' is unavailable"):
+        transcription.TranscriptionService(
+            whisper_model="missing.en",
+            llm_base_url="http://unused.test/v1",
+            llm_api_key=None,
+            llm_model="unused",
+        )
 
 
 def test_transcription_service_accepts_an_injected_intelligence_provider(

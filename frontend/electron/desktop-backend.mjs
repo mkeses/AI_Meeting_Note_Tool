@@ -129,6 +129,7 @@ export function buildBackendLaunchSpec({
   rendererOrigin,
   backendCommand = 'uv',
   backendExecutablePath,
+  llmBaseUrl,
   inheritedEnvironment = process.env,
 }) {
   const isPackagedBackend = Boolean(backendExecutablePath);
@@ -136,8 +137,9 @@ export function buildBackendLaunchSpec({
     ...inheritedEnvironment,
     DATABASE_PATH: desktopRuntime.paths.databasePath,
     HF_HOME: desktopRuntime.paths.modelCacheDirectory,
+    OLLAMA_MODELS: desktopRuntime.paths.ollamaModelDirectory,
     WHISPER_MODEL: desktopRuntime.config.whisperModel,
-    LLM_BASE_URL: desktopRuntime.config.llm.baseUrl,
+    LLM_BASE_URL: llmBaseUrl ?? desktopRuntime.config.llm.baseUrl,
     LLM_MODEL: desktopRuntime.config.llm.model,
     ELECTRON_DESKTOP_MODE: '1',
     ELECTRON_RENDERER_ORIGIN: rendererOrigin,
@@ -284,6 +286,7 @@ export class BackendLifecycleManager {
     rendererOrigin,
     backendCommand,
     backendExecutablePath,
+    llmBaseUrl,
     startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS,
   }) {
     if (this.child) {
@@ -299,6 +302,7 @@ export class BackendLifecycleManager {
       rendererOrigin,
       backendCommand,
       backendExecutablePath,
+      llmBaseUrl,
     });
 
     this.log('backend-starting', { port });

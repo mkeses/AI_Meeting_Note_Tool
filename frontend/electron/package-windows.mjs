@@ -15,6 +15,11 @@ import {
   createWindowsInstallerArtifact,
   resolveWindowsInstallerOutputDirectory,
 } from './windows-installer.mjs';
+import {
+  ensureOllamaRuntimeDownloaded,
+  resolveOllamaDownloadDirectory,
+  stageOllamaRuntime,
+} from './ollama-runtime.mjs';
 
 const require = createRequire(import.meta.url);
 const { createWindowsInstaller } = require('electron-winstaller');
@@ -42,6 +47,13 @@ export async function packageWindowsApplication({
 
   const sourceDirectory = resolveWindowsBackendSourceDirectory();
   validateWindowsBackendArtifact({ sourceDirectory });
+  const ollamaRuntimeDirectory = resolveOllamaDownloadDirectory({
+    repositoryDirectory: REPOSITORY_DIRECTORY,
+  });
+  await ensureOllamaRuntimeDownloaded({
+    repositoryDirectory: REPOSITORY_DIRECTORY,
+    downloadDirectory: ollamaRuntimeDirectory,
+  });
 
   const applicationDirectories = await packagerImpl({
     dir: FRONTEND_DIRECTORY,
@@ -57,6 +69,10 @@ export async function packageWindowsApplication({
   for (const applicationDirectory of applicationDirectories) {
     stageWindowsBackend({
       sourceDirectory,
+      resourcesDirectory: path.join(applicationDirectory, 'resources'),
+    });
+    stageOllamaRuntime({
+      sourceDirectory: ollamaRuntimeDirectory,
       resourcesDirectory: path.join(applicationDirectory, 'resources'),
     });
   }

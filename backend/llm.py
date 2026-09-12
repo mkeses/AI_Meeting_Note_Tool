@@ -12,6 +12,8 @@ from openai import (
     OpenAI,
 )
 
+from model_provisioning import ModelProvisioningState, ollama_status
+
 PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 SYSTEM_PROMPT = PROMPT_FILE.read_text().strip()
 MEETING_NOTES_MAX_TOKENS = 1200
@@ -40,6 +42,7 @@ class OpenAICompatibleMeetingIntelligence:
         model: str,
         timeout_seconds: float = 30.0,
         client: OpenAI | None = None,
+        model_storage_location: str | None = None,
     ) -> None:
         self.client = client or OpenAI(
             base_url=base_url,
@@ -47,11 +50,38 @@ class OpenAICompatibleMeetingIntelligence:
             timeout=timeout_seconds,
         )
         self.model = model
+        self.model_status = ollama_status(
+            model,
+            ModelProvisioningState.CHECKING,
+            storage_location=model_storage_location,
+        )
         if client is None:
             try:
-                self.client.models.list()
+                models = self.client.models.list()
+                available_models = {
+                    str(getattr(item, "id", getattr(item, "model", "")))
+                    for item in getattr(models, "data", models)
+                }
+                if model in available_models:
+                    self.model_status = ollama_status(
+                        model,
+                        ModelProvisioningState.READY,
+                        storage_location=model_storage_location,
+                    )
+                else:
+                    self.model_status = ollama_status(
+                        model,
+                        ModelProvisioningState.MISSING,
+                        storage_location=model_storage_location,
+                    )
                 print("Connected to LLM API!")
             except Exception:
+                self.model_status = ollama_status(
+                    model,
+                    ModelProvisioningState.UNAVAILABLE,
+                    storage_location=model_storage_location,
+                    error="LLM provider is unavailable",
+                )
                 print(
                     "LLM provider is unavailable at startup; cleanup will be unavailable"
                 )
