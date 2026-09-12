@@ -142,15 +142,33 @@ npm run package:win
 ```
 
 The package command validates this artifact, downloads/verifies the pinned
-Ollama runtime when it is not already cached, then copies the complete
-`ai-meeting-note-backend` directory into `resources\backend\` and the complete
-Ollama runtime into `resources\ollama\`. It writes the Windows app folder under
-`dist\windows-electron\` and the Squirrel installer under
-`dist\windows-installer\`. Do not delete `_internal`, `resources\ollama\`, or
-copy only an executable.
+Ollama runtime when it is not already cached, then uses electron-builder's
+standard NSIS target to embed the complete backend under `resources\backend\`
+and complete Ollama runtime under `resources\ollama\`. It writes a standalone
+installer to `dist\windows-installer-nsis\AI Meeting Note Tool Setup <version>.exe`
+and an unpacked inspection directory beside it. The release artifact is the one
+installer executable; it does not require Squirrel `.nupkg` or `RELEASES`
+companion files. Do not delete `_internal`, `resources\ollama\`, or copy only an
+executable.
+
+The NSIS package uses the stable Windows application identifier
+`com.mkeses.ai-meeting-note-tool`; keep it unchanged so future reinstall and
+upgrade behavior continues to target the same application.
 
 The first packaged launch may require Internet access for the `base.en`
 Whisper model and `gemma3:4b`. Both are stored persistently under the
 application's LocalAppData model directories after provisioning. The bundled
 runtime is updated with a new application package; model data remains outside
 the installation directory and survives normal application upgrades.
+
+On startup, the desktop application presents a small setup window while it
+starts Ollama, provisions `gemma3:4b` when required, and prepares the backend.
+Ollama's native pull progress is displayed when available. Faster-Whisper does
+not expose reliable model-download progress, so transcription preparation is
+shown as an indeterminate state. If local AI cleanup cannot be provisioned, the
+user can retry or continue with transcription only. This does not change the
+application-owned model directories or process-ownership rules.
+
+The NSIS installer is currently unsigned. Configure Authenticode signing before
+external distribution and verify the final installer and project-owned backend
+executable signatures on the release machine.

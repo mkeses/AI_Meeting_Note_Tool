@@ -13,6 +13,14 @@ function getErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function reportSetupStatus(callback, status) {
+  try {
+    callback?.(status);
+  } catch {
+    // Setup presentation must not affect local runtime startup.
+  }
+}
+
 function createDeferred() {
   let resolve;
   const promise = new Promise((promiseResolve) => {
@@ -405,6 +413,7 @@ export class OllamaLifecycleManager {
     bundledExecutablePath,
     externalExecutablePaths = [],
     startupTimeoutMs = OLLAMA_STARTUP_TIMEOUT_MS,
+    onSetupStatus,
   }) {
     if (this.child) {
       throw new Error('Ollama is already managed by this application.');
@@ -429,6 +438,10 @@ export class OllamaLifecycleManager {
           this.baseUrl = existingBaseUrl;
           this.error = null;
           this.log('ollama-reused-user-owned', { model });
+          reportSetupStatus(onSetupStatus, {
+            phase: 'starting_ollama',
+            message: 'Local AI engine ready.',
+          });
           return this.getStatus(model);
         }
         this.log('ollama-user-owned-model-missing', { model });
@@ -498,6 +511,10 @@ export class OllamaLifecycleManager {
       this.handleExit(child, `exit ${code ?? 'unknown'} ${signal ?? ''}`)
     );
     this.log('ollama-starting', { executablePath, port });
+    reportSetupStatus(onSetupStatus, {
+      phase: 'starting_ollama',
+      message: 'Starting local AI engine...',
+    });
 
     try {
       await waitForOllamaReadiness({
@@ -510,6 +527,10 @@ export class OllamaLifecycleManager {
       });
       this.state = 'ready';
       this.log('ollama-ready', { port });
+      reportSetupStatus(onSetupStatus, {
+        phase: 'starting_ollama',
+        message: 'Local AI engine ready.',
+      });
 
       if (
         !(await isOllamaModelAvailable({
@@ -520,11 +541,28 @@ export class OllamaLifecycleManager {
       ) {
         this.state = 'provisioning';
         this.log('ollama-model-provisioning-started', { model });
+        reportSetupStatus(onSetupStatus, {
+          phase: 'provisioning_llm_model',
+          message: 'Downloading AI model...',
+        });
         await pullOllamaModel({
           baseUrl,
           model,
           fetchImpl: this.fetchImpl,
-          onProgress: (progress) => this.log('ollama-model-progress', progress),
+          onProgress: (progress) => {
+            this.log('ollama-model-progress', progress);
+            const percent =
+              typeof progress.completed === 'number' &&
+              typeof progress.total === 'number' &&
+              progress.total > 0
+                ? progress.completed / progress.total
+                : undefined;
+            reportSetupStatus(onSetupStatus, {
+              phase: 'provisioning_llm_model',
+              message: 'Downloading AI model...',
+              progress: percent,
+            });
+          },
         });
       }
 

@@ -172,6 +172,7 @@ test('starts, provisions, and owns a bundled Ollama process', async () => {
   const child = createChild();
   const spawnCalls = [];
   const shutdownSteps = [];
+  const setupUpdates = [];
   let modelAvailable = false;
   const fetchImpl = async (url, options = {}) => {
     if (url.endsWith('/api/pull')) {
@@ -213,6 +214,7 @@ test('starts, provisions, and owns a bundled Ollama process', async () => {
     modelDirectory: 'C:\\app\\models\\ollama',
     bundledExecutablePath: 'ollama.exe',
     startupTimeoutMs: 100,
+    onSetupStatus: (update) => setupUpdates.push(update),
   });
 
   assert.equal(status.ownership, 'application');
@@ -223,6 +225,12 @@ test('starts, provisions, and owns a bundled Ollama process', async () => {
   assert.deepEqual(await manager.stop(), { stopped: true, forced: true });
   assert.deepEqual(shutdownSteps, [{ pid: 1234, parentExited: false }]);
   assert.deepEqual(child.signals, []);
+  assert.equal(
+    setupUpdates.some(
+      (update) => update.phase === 'provisioning_llm_model'
+    ),
+    true
+  );
 });
 
 test('uses a targeted taskkill tree command only for a valid owned PID', async () => {

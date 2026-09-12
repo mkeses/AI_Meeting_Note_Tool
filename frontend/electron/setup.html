@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Meeting Note Tool Setup</title>
+    <style>
+      :root {
+        color: #e8eff8;
+        background: #071426;
+        font-family: 'Segoe UI', sans-serif;
+      }
+
+      body {
+        display: grid;
+        min-height: 100vh;
+        margin: 0;
+        place-items: center;
+      }
+
+      main {
+        width: min(420px, calc(100% - 48px));
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: 24px;
+      }
+
+      p {
+        color: #b7c7d9;
+        line-height: 1.5;
+      }
+
+      #status {
+        margin: 24px 0 8px;
+        color: #ffffff;
+        font-weight: 600;
+      }
+
+      #progress-wrap {
+        display: none;
+        height: 8px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #29445f;
+      }
+
+      #progress {
+        width: 0;
+        height: 100%;
+        background: #57c8ff;
+        transition: width 160ms ease;
+      }
+
+      #progress-text {
+        min-height: 20px;
+        margin-top: 8px;
+        color: #a8dfff;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #actions {
+        display: flex;
+        gap: 12px;
+        margin-top: 24px;
+      }
+
+      button {
+        display: none;
+        border: 0;
+        border-radius: 6px;
+        padding: 9px 14px;
+        color: #071426;
+        background: #80d8ff;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 600;
+      }
+
+      button.secondary {
+        color: #e8eff8;
+        background: #29445f;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>AI Meeting Note Tool</h1>
+      <p id="intro">
+        Preparing your local AI models. Downloads happen only when needed, and
+        the app can work offline after setup completes.
+      </p>
+      <div id="status" role="status">Preparing the application...</div>
+      <div id="progress-wrap" aria-hidden="true"><div id="progress"></div></div>
+      <div id="progress-text"></div>
+      <div id="actions">
+        <button id="retry" type="button">Retry</button>
+        <button id="continue" class="secondary" type="button">
+          Continue without AI cleanup
+        </button>
+      </div>
+    </main>
+    <script>
+      const status = document.getElementById('status');
+      const progressWrap = document.getElementById('progress-wrap');
+      const progress = document.getElementById('progress');
+      const progressText = document.getElementById('progress-text');
+      const retry = document.getElementById('retry');
+      const continueButton = document.getElementById('continue');
+
+      function render(next) {
+        status.textContent = next.message;
+        const hasProgress = typeof next.progress === 'number';
+        progressWrap.style.display = hasProgress ? 'block' : 'none';
+        progress.style.width = hasProgress
+          ? `${Math.round(next.progress * 100)}%`
+          : '0';
+        progressText.textContent = hasProgress
+          ? `${Math.round(next.progress * 100)}%`
+          : '';
+        retry.style.display = next.canRetry ? 'inline-block' : 'none';
+        continueButton.style.display = next.canContinue
+          ? 'inline-block'
+          : 'none';
+      }
+
+      retry.addEventListener('click', () => void window.meetingSetup.retry());
+      continueButton.addEventListener(
+        'click',
+        () => void window.meetingSetup.continueWithoutCleanup()
+      );
+      window.meetingSetup.subscribe(render);
+    </script>
+  </body>
+</html>

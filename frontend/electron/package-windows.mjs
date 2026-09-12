@@ -1,35 +1,22 @@
 import os from 'node:os';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
-import { packager } from '@electron/packager';
+import { Arch, build, Platform } from 'electron-builder';
 import {
-  FRONTEND_DIRECTORY,
   REPOSITORY_DIRECTORY,
   resolveWindowsBackendSourceDirectory,
-  stageWindowsBackend,
   validateWindowsBackendArtifact,
 } from './windows-backend-stage.mjs';
 import {
-  WINDOWS_INSTALLER_SETUP_EXECUTABLE_NAME,
-  createWindowsInstallerArtifact,
-  resolveWindowsInstallerOutputDirectory,
-} from './windows-installer.mjs';
-import {
   ensureOllamaRuntimeDownloaded,
   resolveOllamaDownloadDirectory,
-  stageOllamaRuntime,
 } from './ollama-runtime.mjs';
-
-const require = createRequire(import.meta.url);
-const { createWindowsInstaller } = require('electron-winstaller');
+import {
+  createWindowsNsisConfiguration,
+  resolveWindowsNsisOutputDirectory,
+  validateWindowsNsisOutput,
+} from './windows-nsis.mjs';
 
 export const PACKAGE_NAME = 'AI Meeting Note Tool';
-const OUTPUT_DIRECTORY = path.join(
-  REPOSITORY_DIRECTORY,
-  'dist',
-  'windows-electron'
-);
 
 function requireWindowsX64() {
   if (process.platform !== 'win32' || os.arch() !== 'x64') {
@@ -40,67 +27,46 @@ function requireWindowsX64() {
 }
 
 export async function packageWindowsApplication({
-  packagerImpl = packager,
-  createInstaller = createWindowsInstaller,
+  buildImpl = build,
+  packageVersion,
 } = {}) {
   requireWindowsX64();
 
-  const sourceDirectory = resolveWindowsBackendSourceDirectory();
-  validateWindowsBackendArtifact({ sourceDirectory });
-  const ollamaRuntimeDirectory = resolveOllamaDownloadDirectory({
+  const backendDirectory = resolveWindowsBackendSourceDirectory();
+  validateWindowsBackendArtifact({ sourceDirectory: backendDirectory });
+  const ollamaDirectory = resolveOllamaDownloadDirectory({
     repositoryDirectory: REPOSITORY_DIRECTORY,
   });
   await ensureOllamaRuntimeDownloaded({
     repositoryDirectory: REPOSITORY_DIRECTORY,
-    downloadDirectory: ollamaRuntimeDirectory,
+    downloadDirectory: ollamaDirectory,
   });
 
-  const applicationDirectories = await packagerImpl({
-    dir: FRONTEND_DIRECTORY,
-    out: OUTPUT_DIRECTORY,
-    name: PACKAGE_NAME,
-    platform: 'win32',
-    arch: 'x64',
-    asar: true,
-    overwrite: true,
-    prune: true,
+  const outputDirectory = resolveWindowsNsisOutputDirectory();
+  const configuration = createWindowsNsisConfiguration({
+    backendDirectory,
+    ollamaDirectory,
+    outputDirectory,
   });
+  const artifactPaths = await buildImpl({
+    targets: Platform.WINDOWS.createTarget(['nsis'], Arch.x64),
+    config: configuration,
+  });
+  const version = packageVersion ?? process.env.npm_package_version;
 
-  for (const applicationDirectory of applicationDirectories) {
-    stageWindowsBackend({
-      sourceDirectory,
-      resourcesDirectory: path.join(applicationDirectory, 'resources'),
-    });
-    stageOllamaRuntime({
-      sourceDirectory: ollamaRuntimeDirectory,
-      resourcesDirectory: path.join(applicationDirectory, 'resources'),
-    });
+  if (!version) {
+    throw new Error('The Windows package version is required for validation.');
   }
 
-  const installerOutputDirectory = resolveWindowsInstallerOutputDirectory();
-
-  for (const applicationDirectory of applicationDirectories) {
-    await createWindowsInstallerArtifact({
-      applicationDirectory,
-      applicationName: PACKAGE_NAME,
-      createInstaller,
-      outputDirectory: installerOutputDirectory,
-    });
-  }
-
-  for (const applicationDirectory of applicationDirectories) {
-    console.log(`Packaged Windows desktop app: ${applicationDirectory}`);
-  }
-
-  console.log(
-    `Windows installer: ${path.join(
-      installerOutputDirectory,
-      WINDOWS_INSTALLER_SETUP_EXECUTABLE_NAME
-    )}`
-  );
+  const validation = validateWindowsNsisOutput({
+    outputDirectory,
+    version,
+  });
+  console.log(`Standalone Windows installer: ${validation.artifactPath}`);
+  return { artifactPaths, configuration, validation };
 }
 
-if (path.resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
+if (fileURLToPath(import.meta.url) === process.argv[1]) {
   packageWindowsApplication().catch((error) => {
     console.error(error.message);
     process.exitCode = 1;
