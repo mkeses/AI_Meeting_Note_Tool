@@ -60,6 +60,7 @@ export interface SettingsPanelProps {
 }
 
 export interface TranscriptionResultsProps {
+  transcriptIdentity?: string;
   onRegenerateCleanup: () => void | Promise<void>;
   onExportPdf?: () => void | Promise<void>;
   rawText: string | null;

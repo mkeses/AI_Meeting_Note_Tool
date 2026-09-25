@@ -17,6 +17,15 @@ def test_postgres_repository_implements_the_meeting_store_contract() -> None:
     pytest.importorskip("psycopg")
     repository = PostgresMeetingRepository(database_url)
     repository.initialize()
+    with repository._connect() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT pg_get_indexdef(to_regclass('meetings_search_idx')) "
+            "AS definition"
+        )
+        search_index = cursor.fetchone()["definition"]
+    assert search_index is not None
+    assert "raw_text" in search_index
+
     login = f"contract-test-{uuid4().hex}"
     user = repository.create_user(login, "not-used-for-login")
     with pytest.raises(UserConflictError):

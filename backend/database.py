@@ -38,6 +38,7 @@ class MeetingRepository:
         try:
             with self._connect() as connection:
                 connection.execute("PRAGMA journal_mode = WAL")
+                connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS meetings (
@@ -86,6 +87,22 @@ class MeetingRepository:
                     ON meetings (owner_id, created_at DESC)
                     """
                 )
+                fts_columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(meetings_fts)")
+                }
+                if fts_columns and "raw_text" not in fts_columns:
+                    connection.execute(
+                        "DROP TRIGGER IF EXISTS meetings_fts_after_insert"
+                    )
+                    connection.execute(
+                        "DROP TRIGGER IF EXISTS meetings_fts_after_delete"
+                    )
+                    connection.execute(
+                        "DROP TRIGGER IF EXISTS meetings_fts_after_update"
+                    )
+                    connection.execute("DROP TABLE meetings_fts")
+
                 connection.execute(
                     """
                     CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts
@@ -93,6 +110,7 @@ class MeetingRepository:
                         filename,
                         cleaned_text,
                         notes,
+                        raw_text,
                         content='meetings',
                         content_rowid='rowid'
                     )
@@ -103,9 +121,10 @@ class MeetingRepository:
                     CREATE TRIGGER IF NOT EXISTS meetings_fts_after_insert
                     AFTER INSERT ON meetings BEGIN
                         INSERT INTO meetings_fts(
-                            rowid, filename, cleaned_text, notes
+                            rowid, filename, cleaned_text, notes, raw_text
                         ) VALUES (
-                            new.rowid, new.filename, new.cleaned_text, new.notes
+                            new.rowid, new.filename, new.cleaned_text, new.notes,
+                            new.raw_text
                         );
                     END
                     """
@@ -115,10 +134,11 @@ class MeetingRepository:
                     CREATE TRIGGER IF NOT EXISTS meetings_fts_after_delete
                     AFTER DELETE ON meetings BEGIN
                         INSERT INTO meetings_fts(
-                            meetings_fts, rowid, filename, cleaned_text, notes
+                            meetings_fts, rowid, filename, cleaned_text, notes,
+                            raw_text
                         ) VALUES (
                             'delete', old.rowid, old.filename,
-                            old.cleaned_text, old.notes
+                            old.cleaned_text, old.notes, old.raw_text
                         );
                     END
                     """
@@ -126,17 +146,20 @@ class MeetingRepository:
                 connection.execute(
                     """
                     CREATE TRIGGER IF NOT EXISTS meetings_fts_after_update
-                    AFTER UPDATE OF filename, cleaned_text, notes ON meetings BEGIN
+                    AFTER UPDATE OF filename, cleaned_text, notes, raw_text
+                    ON meetings BEGIN
                         INSERT INTO meetings_fts(
-                            meetings_fts, rowid, filename, cleaned_text, notes
+                            meetings_fts, rowid, filename, cleaned_text, notes,
+                            raw_text
                         ) VALUES (
                             'delete', old.rowid, old.filename,
-                            old.cleaned_text, old.notes
+                            old.cleaned_text, old.notes, old.raw_text
                         );
                         INSERT INTO meetings_fts(
-                            rowid, filename, cleaned_text, notes
+                            rowid, filename, cleaned_text, notes, raw_text
                         ) VALUES (
-                            new.rowid, new.filename, new.cleaned_text, new.notes
+                            new.rowid, new.filename, new.cleaned_text, new.notes,
+                            new.raw_text
                         );
                     END
                     """

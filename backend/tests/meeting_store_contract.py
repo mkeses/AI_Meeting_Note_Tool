@@ -16,6 +16,8 @@ def assert_meeting_store_contract(store: MeetingStore) -> None:
     source_key = f"text:{suffix}"
     original_search_term = f"architecture{suffix}"
     updated_search_term = f"rollout{suffix}"
+    original_raw_term = f"rawsearch{suffix}"
+    updated_raw_term = f"rawupdate{suffix}"
     meeting = Meeting(
         id=meeting_id,
         source_key=source_key,
@@ -23,7 +25,7 @@ def assert_meeting_store_contract(store: MeetingStore) -> None:
         created_at="2026-09-01T12:00:00+00:00",
         updated_at="2026-09-01T12:00:00+00:00",
         meeting_type="general",
-        raw_text="Raw transcript",
+        raw_text=original_raw_term,
         cleaned_text="Cleaned transcript",
         source_type="text",
         notes=original_search_term,
@@ -37,6 +39,7 @@ def assert_meeting_store_contract(store: MeetingStore) -> None:
         assert store.get(meeting_id) == meeting
         assert meeting in store.list()
         assert store.search(original_search_term) == [meeting]
+        assert store.search(original_raw_term) == [meeting]
 
         with pytest.raises(MeetingConflictError):
             store.create(replace(meeting, source_key=f"text:duplicate-{suffix}"))
@@ -45,14 +48,21 @@ def assert_meeting_store_contract(store: MeetingStore) -> None:
 
         updated = store.update(
             meeting_id,
-            {"notes": updated_search_term, "filename": "Updated review"},
+            {
+                "raw_text": updated_raw_term,
+                "notes": updated_search_term,
+                "filename": "Updated review",
+            },
         )
         assert updated is not None
+        assert updated.raw_text == updated_raw_term
         assert updated.notes == updated_search_term
         assert updated.filename == "Updated review"
         assert updated.updated_at != meeting.updated_at
         assert store.search(original_search_term) == []
         assert store.search(updated_search_term) == [updated]
+        assert store.search(original_raw_term) == []
+        assert store.search(updated_raw_term) == [updated]
 
         assert store.get(f"missing-{suffix}") is None
         assert store.update(f"missing-{suffix}", {"notes": "No change"}) is None
@@ -63,5 +73,6 @@ def assert_meeting_store_contract(store: MeetingStore) -> None:
         assert store.delete(meeting_id) is True
         assert store.get(meeting_id) is None
         assert store.search(updated_search_term) == []
+        assert store.search(updated_raw_term) == []
     finally:
         store.delete(meeting_id)

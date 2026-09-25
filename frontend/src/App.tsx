@@ -11,6 +11,7 @@ import { ErrorMessage } from './components/ErrorMessage';
 import { RecordButton } from './components/RecordButton';
 import { TextInputZone } from './components/TextInputZone';
 import { TranscriptionResults } from './components/TranscriptionResults';
+import { MeetingSearchExcerpt } from './components/MeetingSearchExcerpt';
 import { UploadZone } from './components/UploadZone';
 import liveStyles from './liveTranscript.module.css';
 import { SettingsPanel } from './components/SettingsPanel';
@@ -1111,6 +1112,12 @@ function App() {
                         <div className={styles.recentSessionDate}>
                           {formatSessionDate(session.createdAt)}
                         </div>
+                        {isMeetingSearchActive && activeMeetingSearchQuery && (
+                          <MeetingSearchExcerpt
+                            meeting={session}
+                            query={activeMeetingSearchQuery}
+                          />
+                        )}
                       </button>
                       <button
                         className={styles.deleteSessionButton}
@@ -1452,6 +1459,10 @@ function App() {
               )}
 
               <TranscriptionResults
+                transcriptIdentity={
+                  activeSessionId ??
+                  `${sessionFilename ?? ''}:${sessionCreatedAt ?? ''}`
+                }
                 rawText={rawText}
                 editedRawText={editedRawText}
                 onRawTextChange={setEditedRawText}

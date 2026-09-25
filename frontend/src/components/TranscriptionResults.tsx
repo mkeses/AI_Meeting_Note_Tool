@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   FileText,
   Sparkles,
@@ -14,6 +14,7 @@ import styles from './TranscriptionResults.module.css';
 import type { TranscriptionResultsProps } from '../types';
 import { TextBox } from './TextBox';
 import { Box } from './Box';
+import { TranscriptFind } from './TranscriptFind';
 
 type ViewMode = 'summary' | 'transcript';
 
@@ -159,6 +160,7 @@ function downloadMarkdownFile(content: string, filename: string) {
 }
 
 export function TranscriptionResults({
+  transcriptIdentity,
   rawText,
   editedRawText,
   onRawTextChange,
@@ -174,6 +176,7 @@ export function TranscriptionResults({
   onCopy,
 }: TranscriptionResultsProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('summary');
+  const transcriptTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   if (!isProcessing && !rawText) {
     return null;
@@ -347,7 +350,14 @@ export function TranscriptionResults({
             )}
           </div>
 
+          <TranscriptFind
+            key={transcriptIdentity ?? rawText ?? ''}
+            value={editedRawText}
+            textareaRef={transcriptTextareaRef}
+          />
+
           <textarea
+            ref={transcriptTextareaRef}
             className={styles.rawTranscriptEditor}
             value={editedRawText}
             onChange={(event) => onRawTextChange(event.target.value)}

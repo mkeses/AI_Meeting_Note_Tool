@@ -1,0 +1,102 @@
+.findControl {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 12px 0 8px;
+}
+
+.findInputWrap {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 1px solid rgba(139, 193, 255, 0.2);
+  border-radius: 8px;
+  color: rgba(220, 230, 243, 0.55);
+  background: rgba(5, 17, 32, 0.55);
+}
+
+.findInputWrap:focus-within {
+  border-color: rgba(139, 193, 255, 0.7);
+  outline: 2px solid rgba(139, 193, 255, 0.2);
+  outline-offset: 2px;
+}
+
+.findInput {
+  width: 150px;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: #dce9f8;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+}
+
+.findInput::placeholder {
+  color: #7f93aa;
+}
+
+.findStatus {
+  min-width: 84px;
+  color: rgba(220, 230, 243, 0.58);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.findButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 30px;
+  padding: 5px 7px;
+  border: 1px solid rgba(139, 193, 255, 0.25);
+  border-radius: 7px;
+  color: #b9d8ff;
+  background: rgba(139, 193, 255, 0.08);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.findButton:hover:not(:disabled) {
+  border-color: rgba(139, 193, 255, 0.6);
+  background: rgba(139, 193, 255, 0.16);
+}
+
+.findButton:focus-visible {
+  outline: 2px solid rgba(139, 193, 255, 0.65);
+  outline-offset: 2px;
+}
+
+.findButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+@media (max-width: 520px) {
+  .findControl {
+    flex-wrap: wrap;
+  }
+
+  .findInputWrap {
+    flex: 1 1 100%;
+  }
+
+  .findInput {
+    width: 100%;
+  }
+}

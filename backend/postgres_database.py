@@ -135,16 +135,27 @@ class PostgresMeetingRepository:
                 )
                 cursor.execute(
                     """
-                    CREATE INDEX IF NOT EXISTS meetings_search_idx
-                    ON meetings
-                    USING GIN (
-                        to_tsvector(
-                            'simple',
-                            filename || ' ' || cleaned_text || ' ' || notes
-                        )
-                    )
+                    SELECT pg_get_indexdef(
+                        to_regclass('meetings_search_idx')
+                    ) AS definition
                     """
                 )
+                search_index = cursor.fetchone()["definition"]
+                if search_index is None or "raw_text" not in search_index:
+                    cursor.execute("DROP INDEX IF EXISTS meetings_search_idx")
+                    cursor.execute(
+                        """
+                        CREATE INDEX meetings_search_idx
+                        ON meetings
+                        USING GIN (
+                            to_tsvector(
+                                'simple',
+                                filename || ' ' || raw_text || ' ' ||
+                                cleaned_text || ' ' || notes
+                            )
+                        )
+                        """
+                    )
         except Exception as error:
             raise self._meeting_storage_error(
                 "Unable to initialize meeting storage", error
@@ -336,7 +347,8 @@ class PostgresMeetingRepository:
         if not tsquery:
             return []
         search_vector = (
-            "to_tsvector('simple', filename || ' ' || cleaned_text || ' ' || notes)"
+            "to_tsvector('simple', filename || ' ' || raw_text || ' ' || "
+            "cleaned_text || ' ' || notes)"
         )
         return self._query_meetings(
             f"""

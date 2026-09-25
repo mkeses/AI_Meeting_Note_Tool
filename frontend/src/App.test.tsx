@@ -894,12 +894,14 @@ describe('App live transcript editor', () => {
       id: 'recent-session',
       sourceKey: 'recording:recent',
       filename: 'Recent meeting',
+      rawText: 'Recent-only excerpt should stay hidden.',
     });
     const searchResult = createSession({
       id: 'search-session',
       sourceKey: 'text:search',
       filename: 'Architecture review',
       sourceType: 'text',
+      rawText: 'The raw transcript discusses architecture tradeoffs.',
       notes: 'Review the service boundary.',
     });
     fetchMock.mockResolvedValueOnce(jsonResponse([recentSession]));
@@ -910,6 +912,9 @@ describe('App live transcript editor', () => {
     expect(
       await screen.findByRole('button', { name: /^recent meeting/i })
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Recent-only excerpt should stay hidden/)
+    ).not.toBeInTheDocument();
 
     const searchInput = screen.getByRole('textbox', {
       name: 'Search saved meetings',
@@ -923,6 +928,10 @@ describe('App live transcript editor', () => {
         { credentials: 'include' }
       );
     });
+    expect(screen.getByText('Raw transcript ·')).toBeInTheDocument();
+    expect(
+      screen.getByText('The raw transcript discusses architecture tradeoffs.')
+    ).toBeInTheDocument();
 
     await user.click(
       await screen.findByRole('button', { name: /^architecture review/i })
@@ -938,6 +947,9 @@ describe('App live transcript editor', () => {
     expect(
       screen.getByRole('button', { name: /^recent meeting/i })
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Recent-only excerpt should stay hidden/)
+    ).not.toBeInTheDocument();
   });
 
   it('shows empty and error states for backend meeting searches', async () => {

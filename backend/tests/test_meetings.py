@@ -293,6 +293,7 @@ def test_search_index_tracks_meeting_updates_and_deletions(
         "/api/meetings",
         json=meeting_payload(
             filename="Legacy planning",
+            rawText="legacyraw transcript only",
             cleanedText="The obsolete release checklist is ready.",
             notes="Archive the old design notes.",
         ),
@@ -301,11 +302,15 @@ def test_search_index_tracks_meeting_updates_and_deletions(
     assert api_client.get("/api/meetings/search", params={"q": "legacy"}).json() == [
         created
     ]
+    assert api_client.get("/api/meetings/search", params={"q": "legacyraw"}).json() == [
+        created
+    ]
 
     updated_response = api_client.patch(
         "/api/meetings/meeting-1",
         json={
             "filename": "Current planning",
+            "rawText": "currentraw transcript only",
             "cleanedText": "The current rollout checklist is ready.",
             "notes": "Share the current design notes.",
         },
@@ -314,6 +319,12 @@ def test_search_index_tracks_meeting_updates_and_deletions(
     assert updated_response.status_code == 200
     updated = updated_response.json()
     assert api_client.get("/api/meetings/search", params={"q": "legacy"}).json() == []
+    assert (
+        api_client.get("/api/meetings/search", params={"q": "legacyraw"}).json() == []
+    )
+    assert api_client.get(
+        "/api/meetings/search", params={"q": "currentraw"}
+    ).json() == [updated]
     assert api_client.get("/api/meetings/search", params={"q": "rollout"}).json() == [
         updated
     ]
@@ -323,3 +334,6 @@ def test_search_index_tracks_meeting_updates_and_deletions(
 
     assert api_client.delete("/api/meetings/meeting-1").status_code == 204
     assert api_client.get("/api/meetings/search", params={"q": "current"}).json() == []
+    assert (
+        api_client.get("/api/meetings/search", params={"q": "currentraw"}).json() == []
+    )
